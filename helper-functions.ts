@@ -1,11 +1,11 @@
 import { PoolClient } from "pg";
-import { limitedMathCalculator } from "~/global";
 import { pool } from "~/postgres";
 import { Request } from "express";
 import named from 'yesql';
 import moment from "moment";
 import * as uuid from 'uuid';
 import crypto from 'crypto';
+import { create, all } from 'mathjs'
 
 //=====================================================================
 //== Types
@@ -29,6 +29,10 @@ export function callbackAndReturn(data: any, callback?: ((result: any) => any) |
     if (callback) callback(data);
     return data
 }
+
+export function isDebug() {
+    return process.env.NODE_ENV !== 'production';
+};
 
 //=====================================================================
 //== SQL Helper
@@ -494,7 +498,7 @@ export async function pgSimplePost({ scheme, table, keyValue = {}, callback = nu
 //=====================================================================
 
 interface IsCalculableValueType {
-    value: any,
+    value: any, 
     min?: number | null,
     max?: number | null,
 }
@@ -568,6 +572,22 @@ export function isBoolean({ value }: IsBoolean): { [index: string]: any } {
     else if (typeof value == "string" && !(/^(?:TRUE|FALSE)$/i.test(value))) throw new ErrorWithCodeAndMessage({ success: false, message: "Invalid boolean", error_code: '9cd04962-a5f6-5850-accc-dd6a552a863f' });
     return { success: true }
 }
+
+//=====================================================================
+//== MathJS
+//=====================================================================
+
+const math = create(all)
+math.import({
+    'import': function () { throw new Error('Function import is disabled') },
+    'createUnit': function () { throw new Error('Function createUnit is disabled') },
+    //'evaluate': function () { throw new Error('Function evaluate is disabled') },
+    //'parse': function () { throw new Error('Function parse is disabled') },
+    'simplify': function () { throw new Error('Function simplify is disabled') },
+    'derivative': function () { throw new Error('Function derivative is disabled') }
+}, { override: true })
+const limitedMathCalculator = math.evaluate
+export { limitedMathCalculator }
 
 //=====================================================================
 //== Default-Converts
