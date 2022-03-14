@@ -168,7 +168,7 @@ interface pgSimpleGetInterface {
     scheme: string,
     table: string,
     id?: string | null,
-    keys: string[] | null,
+    keys?: string[] | null,
     filter?: Filter[] | { [index: string]: any },
     orderBy?: string | null,
     orderDirection?: "ASC" | "DESC" | null,
