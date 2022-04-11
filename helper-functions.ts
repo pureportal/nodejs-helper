@@ -8,6 +8,24 @@ import crypto from 'crypto';
 import { create, all } from 'mathjs'
 
 //=====================================================================
+//== Enums
+//=====================================================================
+
+export enum JoinType {
+    JOIN = 'JOIN',
+    INNER_JOIN = 'INNER JOIN',
+    LEFT_JOIN = 'LEFT JOIN',
+    RIGHT_JOIN = 'RIGHT JOIN',
+    FULL_JOIN = 'FULL JOIN',
+    OUTER_JOIN = 'OUTER JOIN',
+    NATURAL_JOIN = 'NATURAL JOIN',
+    CROSS_JOIN = 'CROSS JOIN',
+    LEFT_OUTER_JOIN = 'LEFT OUTER JOIN',
+    RIGHT_OUTER_JOIN = 'RIGHT OUTER JOIN',
+    FULL_OUTER_JOIN = 'FULL OUTER JOIN',
+}
+
+//=====================================================================
 //== Types
 //=====================================================================
 
@@ -15,6 +33,27 @@ export type Filter = {
     id: string,
     where: string,
     value?: any | any[],
+}
+
+interface JoinInterface {
+    type: JoinType,
+    from: string,
+    on: string,
+}
+export class Join {
+    type: JoinType;
+    from: string;
+    on: string;
+
+    constructor({ type, from, on }: JoinInterface) {
+        this.type = type;
+        this.from = from;
+        this.on = on;
+    }
+
+    toQuery() {
+        return `${this.type} ${this.from} ON ${this.on}`;
+    }
 }
 
 //=====================================================================
@@ -172,6 +211,7 @@ interface pgSimpleGetInterface {
     filter?: Filter[] | { [index: string]: any },
     orderBy?: string | null,
     orderDirection?: "ASC" | "DESC" | null,
+    join?: Join[] | null,
     limit?: number | null,
     offset?: number | null,
     request?: Request | null,
@@ -181,7 +221,7 @@ interface pgSimpleGetInterface {
     callback?: ((result: Object) => any) | null,
     client?: PoolClient | null,
 }
-export async function pgSimpleGet({ scheme, table, id = null, keys = null, filter = [], request = null, orderBy = null, orderDirection = null, limit = null, offset = null, forceAsList = false, keyMapping = null, allowedKeys = null, callback = null, client = null }: pgSimpleGetInterface): Promise<{ [index: string]: any }> {
+export async function pgSimpleGet({ scheme, table, id = null, keys = null, filter = [], request = null, orderBy = null, orderDirection = null, join = null, limit = null, offset = null, forceAsList = false, keyMapping = null, allowedKeys = null, callback = null, client = null }: pgSimpleGetInterface): Promise<{ [index: string]: any }> {
 
     // Get function start time
     const start: [number, number] = process.hrtime();
@@ -369,15 +409,16 @@ export async function pgSimpleGet({ scheme, table, id = null, keys = null, filte
             SELECT 
                 ${scheme}.${table}.id, 
                 FLOOR(EXTRACT(EPOCH FROM ${scheme}.${table}.created_at)) AS created_at,
-                FLOOR(EXTRACT(EPOCH FROM ${scheme}.${table}.created_at)) AS updated_at${keys != null && keys.length > 0 ? ',' : ''}
-                ${keys?.map((element, index) => /^[a-z\_]$/.test(element) ? `${scheme}.${table}.${element}\n` : `${element}`)}
+                FLOOR(EXTRACT(EPOCH FROM ${scheme}.${table}.updated_at)) AS updated_at${keys != null && keys.length > 0 ? ',' : ''}
+                ${keys?.map((element, _index) => /^[a-z\_]$/.test(element) ? `${scheme}.${table}.${element}\n` : `${element}`)}
             FROM 
                 ${scheme}.${table}
+            ${join != undefined && join?.length > 0 ? join.map((element, _index) => element.toQuery()).join('\n') : ''}
             WHERE TRUE
                 ${id != null ? `AND ${scheme}.${table}.id = :id` : ''}
-                ${filter != null ? (filter as Filter[]).map((e) => `AND ${(e.where as string).replace(/\$scheme/g,scheme).replace(/\$table/g,table)}`).join('\n') : ''}
+                ${filter != null ? (filter as Filter[]).map((e) => `AND ${(e.where as string).replace(/\$scheme/g, scheme).replace(/\$table/g, table)}`).join('\n') : ''}
             ORDER BY 
-                ${_orderBy ?? "updated_at"} ${_orderDirection ?? "ASC"}
+                ${_orderBy ?? `${scheme}.${table}.updated_at`} ${_orderDirection ?? "ASC"}
             LIMIT 
                 :limit
             OFFSET
@@ -498,7 +539,7 @@ export async function pgSimplePost({ scheme, table, keyValue = {}, callback = nu
 //=====================================================================
 
 interface IsCalculableValueType {
-    value: any, 
+    value: any,
     min?: number | null,
     max?: number | null,
 }
