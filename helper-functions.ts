@@ -221,7 +221,7 @@ interface pgSimpleGetInterface {
     callback?: ((result: Object) => any) | null,
     client?: PoolClient | null,
 }
-export async function pgSimpleGet({ scheme, table, id = null, keys = null, filter = [], request = null, orderBy = null, orderDirection = null, join = null, limit = null, offset = null, forceAsList = false, keyMapping = null, allowedKeys = null, callback = null, client = null }: pgSimpleGetInterface): Promise<{ [index: string]: any }> {
+export async function pgSimpleGet({ scheme, table, id = null, keys = null, filter = [], request = null, orderBy = null, join = null, limit = null, offset = null, forceAsList = false, keyMapping = null, allowedKeys = null, callback = null, client = null }: pgSimpleGetInterface): Promise<{ [index: string]: any }> {
 
     // Get function start time
     const start: [number, number] = process.hrtime();
@@ -234,7 +234,6 @@ export async function pgSimpleGet({ scheme, table, id = null, keys = null, filte
         let _limit = limit;
         let _offset = offset
         let _orderBy = orderBy
-        let _orderDirection = orderDirection;
 
         // Convert filter map to array
         if (filter != null && typeof filter.length == "undefined") {
@@ -259,7 +258,6 @@ export async function pgSimpleGet({ scheme, table, id = null, keys = null, filte
             if (_offset == null && typeof request.query.offset == "string" && parseInt(request.query.offset) != NaN) _offset = parseInt(request.query.offset);
             if (_orderBy == null && typeof request.query.order_by == "string") _orderBy = await pgMapKeyName({ key: request.query.order_by, mapping: keyMapping });
             if (_orderBy == null && typeof request.query["order-by"] == "string") _orderBy = await pgMapKeyName({ key: request.query["order-by"], mapping: keyMapping });
-            if (_orderDirection == null && typeof request.query.order_direction == "string") _orderDirection = await pgGetOrderDirection({ orderByDirection: request.query.order_direction });
 
             // Detect and parse filters
             if (search != null) {
@@ -418,7 +416,7 @@ export async function pgSimpleGet({ scheme, table, id = null, keys = null, filte
                 ${id != null ? `AND ${scheme}.${table}.id = :id` : ''}
                 ${filter != null ? (filter as Filter[]).map((e) => `AND ${(e.where as string).replace(/\$scheme/g, scheme).replace(/\$table/g, table)}`).join('\n') : ''}
             ORDER BY 
-                ${_orderBy ?? `${scheme}.${table}.updated_at`} ${_orderDirection ?? "ASC"}
+                ${_orderBy ?? `${scheme}.${table}.updated_at DESC`}
             LIMIT 
                 :limit
             OFFSET
