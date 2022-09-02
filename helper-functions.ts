@@ -408,7 +408,7 @@ export async function pgSimpleGet({ scheme, table, id = null, keys = null, filte
                 ${scheme}.${table}.id, 
                 FLOOR(EXTRACT(EPOCH FROM ${scheme}.${table}.created_at)) AS created_at,
                 FLOOR(EXTRACT(EPOCH FROM ${scheme}.${table}.updated_at)) AS updated_at${keys != null && keys.length > 0 ? ',' : ''}
-                ${keys?.map((element, _index) => /^[a-z\_]$/.test(element) ? `${scheme}.${table}.${element}\n` : `${element}`)}
+                ${keys != null ? keys?.map((element, _index) => /^[a-z\_]$/.test(element) ? `${scheme}.${table}.${element}\n` : `${element}`) : ''}
             FROM 
                 ${scheme}.${table}
             ${join != undefined && join?.length > 0 ? join.map((element, _index) => element.toQuery()).join('\n') : ''}
