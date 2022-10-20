@@ -77,15 +77,50 @@ export function isDebug() {
 //== SQL Helper
 //=====================================================================
 
-interface PgGetOrderDirectionInterface {
-    orderByDirection?: any
+export interface getParameterFromRequestParams {
+    request: Request;
 }
-export async function pgGetOrderDirection({ orderByDirection }: PgGetOrderDirectionInterface): Promise<'ASC' | 'DESC' | null> {
-    if (typeof orderByDirection == "string") {
-        if (/^ASC$/i.test(orderByDirection)) return 'ASC';
-        if (/^DESC$/i.test(orderByDirection)) return 'DESC';
+export interface getParameterFromRequestResult {
+    filter?: Filter[] | { [index: string]: any },
+    limit: number | null;
+    offset: number | null;
+    orderBy: { [x: string]: string; } | null;
+}
+export async function getParameterFromRequest(request: Request): Promise<getParameterFromRequestResult> {
+    const filter = typeof request.query.search == "string" ? JSON.parse(request.query.search) : typeof request.query.filter == "string" ? JSON.parse(request.query.filter) : null;
+    const limit = typeof request.query.limit == "string" && parseInt(request.query.limit) != NaN ? parseInt(request.query.limit) : null;
+    const offset = typeof request.query.offset == "string" && parseInt(request.query.offset) != NaN ? parseInt(request.query.offset) : null;
+    let orderBy: string | { [x: string]: string; } | null = typeof request.query.order_by == "string" ? request.query.order_by : typeof request.query.orderBy == "string" ? request.query.orderBy : null;
+    
+    // Check if orderBy is a JSON string and parse it
+    if (orderBy && typeof orderBy == "string" && orderBy.startsWith('{')) {
+        orderBy = JSON.parse(orderBy) as { [x: string]: string; };
     }
-    return null;
+    else if (orderBy && typeof orderBy == "string") {
+        let newOrderBy: { [x: string]: string; } = {};
+        const orderByArray = orderBy.split(',');
+        for (let i = 0; i < orderByArray.length; i++) {
+            const orderByItem = orderByArray[i];
+            const orderByItemArray = orderByItem.split(' ');
+            if (orderByItemArray.length == 1) {
+                newOrderBy[orderByItemArray[0]] = 'ASC';
+            }
+            else if (orderByItemArray.length == 2) {
+                if(orderByItemArray[1] != 'ASC' && orderByItemArray[1] != 'DESC') {
+                    newOrderBy[orderByItemArray[0]] = 'ASC';
+                }
+                else {
+                    newOrderBy[orderByItemArray[0]] = orderByItemArray[1];
+                }
+            }
+        }
+        orderBy = newOrderBy;
+    }
+    else{
+        orderBy = null;
+    }
+
+    return { filter: filter, limit: limit, offset: offset, orderBy: orderBy };
 }
 
 interface PgMapKeyNameInterface {
@@ -105,13 +140,26 @@ export async function pgMapKeyName({ key, mapping }: PgMapKeyNameInterface): Pro
 interface PgSimplePatchInterface {
     scheme: string,
     table: string,
-    id: string,
     key: string,
     value: unknown,
+    filter?: { [index: string]: unknown } | null,
     callback?: ((result: Object) => any) | null,
     client?: PoolClient | null,
 }
-export async function pgSimplePatch({ scheme, table, id, key, value, callback = null, client = null }: PgSimplePatchInterface): Promise<{ [index: string]: any }> {
+export async function pgSimplePatch({ scheme, table, key, value, filter, callback = null, client = null }: PgSimplePatchInterface): Promise<{ [index: string]: any }> {
+    return await pgSimplePatchMany({ scheme, table, data: { [key]: value }, filter, callback, client });
+}
+
+interface PgSimplePatchInterfaceMany {
+    scheme: string,
+    table: string,
+    data: { [index: string]: unknown },
+    filter?: { [index: string]: unknown } | null,
+    keyMapping?: { [index: string]: string } | null,
+    callback?: ((result: Object) => any) | null,
+    client?: PoolClient | null,
+}
+export async function pgSimplePatchMany({ scheme, table, data, filter = null, keyMapping = null, callback = null, client = null }: PgSimplePatchInterfaceMany): Promise<{ [index: string]: any }> {
 
     // Get function start time
     const start: [number, number] = process.hrtime();
@@ -119,20 +167,49 @@ export async function pgSimplePatch({ scheme, table, id, key, value, callback = 
     // Connect to PostgreSQL-Pool
     const _client = client ?? await pool.connect()
 
+    // Validate data
+    if (Object.keys(data).length == 0) {
+        return callbackAndReturn({ success: true }, callback);
+    }
+
     try {
 
         // Begin transaction
         if (!client) await _client.query('BEGIN')
 
+        // Remove forbidden keys
+        let forbiddenKeys = ['id', 'created_at', 'updated_at', 'deleted_at'];
+        for (let key of forbiddenKeys) {
+            if (Object.keys(data).indexOf(key) >= 0) {
+                delete data[key];
+            }
+        }
+
+        // Create named values
+        let namedValues: { [index: string]: any } = {}
+        Object.keys(data).forEach((e) => {
+            namedValues[`INSERT_${e}`] = data[e];
+        });
+        if (filter != null) {
+            Object.keys(filter).forEach((e) => {
+                namedValues[`WHERE_${e}`] = filter[e];
+            });
+        }
+
         // Get requested scopes
-        const resultProfile = await _client.query(`
+        const resultProfile = await _client.query(named.pg(`
             UPDATE 
                 ${scheme}.${table}
             SET 
-                ${key} = $2
-            WHERE 
-                id = $1 
-            `, [id, value]);
+                ${Object.keys(data).map((e, index) => {
+            if (index == 0) return `${e} = :INSERT_${e}`;
+            return `, ${e} = :INSERT_${e}`;
+        }).join('\n')}
+            ${filter != null ? `WHERE ${Object.keys(filter).map((e, index) => {
+            if (index == 0) return `${e} = :WHERE_${e}`;
+            return `AND ${e} = :WHERE_${e}`;
+        }).join('\n')}` : ''}
+        `, { useNullForMissing: true })(namedValues));
         if (resultProfile.rowCount <= 0 || resultProfile.rowCount > 1) throw new ErrorWithCodeAndMessage({ success: false, message: "Internal server error", error_code: 'a455f906-52af-5e1a-a004-37cf00cbcd8e' });
 
         // Commit transaction
@@ -141,6 +218,8 @@ export async function pgSimplePatch({ scheme, table, id, key, value, callback = 
         // Return machine list
         return callbackAndReturn({ success: true }, callback);
     } catch (e) {
+
+        console.error(e);
 
         // Rollback transaction
         if (!client) await _client.query('ROLLBACK');
@@ -209,8 +288,7 @@ interface pgSimpleGetInterface {
     id?: string | null,
     keys?: string[] | null,
     filter?: Filter[] | { [index: string]: any },
-    orderBy?: string | null,
-    orderDirection?: "ASC" | "DESC" | null,
+    orderBy?: string | { [x: string]: string; } | null,
     join?: Join[] | null,
     limit?: number | null,
     offset?: number | null,
@@ -218,10 +296,11 @@ interface pgSimpleGetInterface {
     forceAsList?: boolean,
     keyMapping?: { [index: string]: string } | null,
     allowedKeys?: string[] | null,
+    hideDeleted?: boolean,
     callback?: ((result: Object) => any) | null,
     client?: PoolClient | null,
 }
-export async function pgSimpleGet({ scheme, table, id = null, keys = null, filter = [], request = null, orderBy = null, join = null, limit = null, offset = null, forceAsList = false, keyMapping = null, allowedKeys = null, callback = null, client = null }: pgSimpleGetInterface): Promise<{ [index: string]: any }> {
+export async function pgSimpleGet({ scheme, table, id = null, keys = null, filter = [], request = null, orderBy = null, join = null, limit = null, offset = null, forceAsList = false, keyMapping = null, allowedKeys = null, hideDeleted = true, callback = null, client = null }: pgSimpleGetInterface): Promise<{ [index: string]: any }> {
 
     // Get function start time
     const start: [number, number] = process.hrtime();
@@ -256,8 +335,7 @@ export async function pgSimpleGet({ scheme, table, id = null, keys = null, filte
             let search = typeof request.query.search == "string" ? request.query.search : null;
             if (_limit == null && typeof request.query.limit == "string" && parseInt(request.query.limit) != NaN) _limit = parseInt(request.query.limit);
             if (_offset == null && typeof request.query.offset == "string" && parseInt(request.query.offset) != NaN) _offset = parseInt(request.query.offset);
-            if (_orderBy == null && typeof request.query.order_by == "string") _orderBy = await pgMapKeyName({ key: request.query.order_by, mapping: keyMapping });
-            if (_orderBy == null && typeof request.query["order-by"] == "string") _orderBy = await pgMapKeyName({ key: request.query["order-by"], mapping: keyMapping });
+            if (_orderBy == null && typeof request.query.orderBy == "string") _orderBy = request.query.orderBy;
 
             // Detect and parse filters
             if (search != null) {
@@ -399,7 +477,35 @@ export async function pgSimpleGet({ scheme, table, id = null, keys = null, filte
             offset: (_offset === -1 ? 0 : _offset) ?? 0,
         }
         if (filter != null) {
-            (filter as Filter[]).forEach((e) => namedValues[e.id] = e.value);
+            (filter as Filter[]).forEach((e) => {
+                // Skip if key is id
+                if (e.id == "id") return;
+
+                // Add to named values
+                namedValues[e.id] = e.value
+            });
+        }
+
+        // Convert orderBy to map if string (e.g. "id ASC, name DESC")
+        if (typeof _orderBy == "string") {
+            let orderByMap: { [x: string]: string; } = {};
+            _orderBy.split(',').forEach(async (e) => {
+                let [key, value] = e.split(' ');
+                key = await pgMapKeyName({ key: key, mapping: keyMapping });
+                value = value.trim();
+                orderByMap[key] = value;
+            })
+            _orderBy = orderByMap;
+        }
+
+        // Create order by string
+        let orderByString: string | null = null;
+        if (_orderBy != null && Object.keys(_orderBy).length > 0) {
+            orderByString = "";
+            Object.keys(_orderBy).forEach(async (key:string, index) => {
+                orderByString += `${scheme}.${table}.${key} ${(_orderBy as { [x: string]: string; })[key]}`;
+                if (index < Object.keys(_orderBy as { [x: string]: string; }).length - 1) orderBy += ", ";
+            });
         }
 
         // Get requested data
@@ -414,14 +520,15 @@ export async function pgSimpleGet({ scheme, table, id = null, keys = null, filte
             ${join != undefined && join?.length > 0 ? join.map((element, _index) => element.toQuery()).join('\n') : ''}
             WHERE TRUE
                 ${id != null ? `AND ${scheme}.${table}.id = :id` : ''}
+                ${hideDeleted ? `AND ${scheme}.${table}.deleted_at IS NULL` : ''}
                 ${filter != null ? (filter as Filter[]).map((e) => `AND ${(e.where as string).replace(/\$scheme/g, scheme).replace(/\$table/g, table)}`).join('\n') : ''}
             ORDER BY 
-                ${_orderBy ?? `${scheme}.${table}.updated_at DESC`}
+                ${orderByString ?? `${scheme}.${table}.updated_at DESC`}
             LIMIT 
                 :limit
             OFFSET
                 :offset
-            `, { useNullForMissing: true })(namedValues));
+        `, { useNullForMissing: true })(namedValues));
         if (result.rowCount < 0) throw new ErrorWithCodeAndMessage({ success: false, message: "Internal server error", error_code: '561c1368-5626-5ae3-af8d-a153eb59d499' });
 
         // Return list
