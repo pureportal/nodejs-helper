@@ -57,13 +57,13 @@ export class Join {
     }
 }
 
-export type ValidationType = { 
+export type ValidationType = {
     name: string,
     type: "string" | "number" | "boolean" | "date" | "time" | "id",
     required?: boolean,
     min?: number,
     max?: number,
-    pattern?: RegExp,
+    pattern?: string,
     allowedChars?: string,
     decimals?: number,
 }
@@ -215,13 +215,13 @@ export async function pgSimplePatchMany({ scheme, table, data, filter = null, ke
                 ${scheme}.${table}
             SET 
             ${Object.keys(data).map((e, index) => {
-                if (index == 0) return `${e} = :INSERT_${e}`;
-                return `, ${e} = :INSERT_${e}`;
-            }).join('\n')}
+            if (index == 0) return `${e} = :INSERT_${e}`;
+            return `, ${e} = :INSERT_${e}`;
+        }).join('\n')}
                 ${filter != null ? `WHERE ${Object.keys(filter).map((e, index) => {
-                if (index == 0) return `${e} = :WHERE_${e}`;
-                return `AND ${e} = :WHERE_${e}`;
-            }).join('\n')}` : ''}
+            if (index == 0) return `${e} = :WHERE_${e}`;
+            return `AND ${e} = :WHERE_${e}`;
+        }).join('\n')}` : ''}
             ${returnData ? 'RETURNING *' : ''};
         `, { useNullForMissing: true })(namedValues));
         if (resultProfile.rowCount <= 0 || resultProfile.rowCount > 1) throw new ErrorWithCodeAndMessage({ success: false, message: "Internal server error", error_code: 'a455f906-52af-5e1a-a004-37cf00cbcd8e' });
@@ -751,7 +751,7 @@ export function validate({ value, rules }: Validate): { success: boolean, messag
         if (rules.min) return { success: false, message: `${rules.name} must be at least ${rules.min} characters`, error_code: '56d95835-e72c-51ac-ac19-fba0b5c481a3' };
         if (rules.max) return { success: false, message: `${rules.name} must be at most ${rules.max} characters`, error_code: '87e4cedd-a223-56c0-a8a1-bca16807a6d9' };
         if (rules.allowedChars && !new RegExp(`^[${rules.allowedChars}]+$`).test(value)) return { success: false, message: `${rules.name} contains invalid characters`, error_code: '4c38141b-5436-59c5-a537-d9201ea50570' };
-        if (rules.pattern && !rules.pattern.test(value)) return { success: false, message: `${rules.name} is invalid`, error_code: '8a0cd2ba-2354-5a23-b4da-5ed0c74ab2fd' };
+        if (rules.pattern && !(new RegExp(rules.pattern).test(value))) return { success: false, message: `${rules.name} is invalid`, error_code: '8a0cd2ba-2354-5a23-b4da-5ed0c74ab2fd' };
 
         return { success: true };
     }
@@ -835,7 +835,7 @@ interface ValidateAll {
     // Data as list of { name, value, type, rules }
     data: any,
 }
-export function validateAll({ data }: ValidateAll): { success: boolean, message?: string, error_code?: string} {
+export function validateAll({ data }: ValidateAll): { success: boolean, message?: string, error_code?: string } {
     for (const key in data) {
         const value = data[key];
         if (value == null) continue;
@@ -908,7 +908,7 @@ export function convert({ value, type, rules = {} }: Convert): any {
         return value
     }
     else if (type == 'boolean') {
-        
+
         // Convert if value is a string
         if (typeof value == "string") value = value == 'true';
 
