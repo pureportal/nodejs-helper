@@ -73,7 +73,7 @@ export type ValidationType = {
 //=====================================================================
 
 export function outputExecutionTime(fileName: string, functionName: string, executionTime: number) {
-    console.info(fileName.replace((global as any).appRoot, "~") + ':' + functionName + ' [Execution time]: %dms', executionTime);
+    //console.info(fileName.replace((global as any).appRoot, "~") + ':' + functionName + ' [Execution time]: %dms', executionTime);
 }
 
 export function callbackAndReturn(data: any, callback?: ((result: any) => any) | null): any {
@@ -99,7 +99,7 @@ export interface getParameterFromRequestResult {
     orderBy: { [x: string]: string; } | null;
 }
 export async function getParameterFromRequest(request: Request): Promise<getParameterFromRequestResult> {
-    const filter = typeof request.query.search == "string" ? JSON.parse(request.query.search) : typeof request.query.filter == "string" ? JSON.parse(request.query.filter) : null;
+    const filter = typeof request.query.search == "string" ? JSON.parse(request.query.search) : typeof request.query.filter == "string" ? JSON.parse(request.query.filter) : typeof request.query.search == "object" ? request.query.search : typeof request.query.filter == "object" ? request.query.filter : null;
     const limit = typeof request.query.limit == "string" && !Number.isNaN(parseInt(request.query.limit)) ? parseInt(request.query.limit) : null;
     const offset = typeof request.query.offset == "string" && !Number.isNaN(parseInt(request.query.offset)) ? parseInt(request.query.offset) : null;
     let orderBy: string | { [x: string]: string; } | null = typeof request.query.order_by == "string" ? request.query.order_by : typeof request.query.orderBy == "string" ? request.query.orderBy : null;
@@ -224,7 +224,13 @@ export async function pgSimplePatchMany({ scheme, table, data, filter = null, ke
         }).join('\n')}` : ''}
             ${returnData ? 'RETURNING *' : ''};
         `, { useNullForMissing: true })(namedValues));
-        if (resultProfile.rowCount <= 0 || resultProfile.rowCount > 1) throw new ErrorWithCodeAndMessage({ success: false, message: "Internal server error", error_code: 'a455f906-52af-5e1a-a004-37cf00cbcd8e' });
+        if (resultProfile.rowCount <= 0 || resultProfile.rowCount > 1){
+            throw new ErrorWithCodeAndMessage({ 
+                success: false, 
+                message: `Internal server error (scheme: ${scheme}, table: ${table}, data: ${data}, filter: ${filter})`, 
+                error_code: 'a455f906-52af-5e1a-a004-37cf00cbcd8e' 
+            });
+        }
 
         // Commit transaction
         if (!client) await _client.query('COMMIT')
@@ -238,7 +244,11 @@ export async function pgSimplePatchMany({ scheme, table, data, filter = null, ke
         // Rollback transaction
         if (!client) await _client.query('ROLLBACK');
 
-        throw new ErrorWithCodeAndMessage({ success: false, message: "Internal server error", error_code: 'd59e8c88-396e-50df-a1e3-83e9d17961ac' });
+        throw new ErrorWithCodeAndMessage({ 
+            success: false, 
+            message: `Internal server error (scheme: ${scheme}, table: ${table}, data: ${JSON.stringify(data, null, 4)}, filter: ${filter})`, 
+            error_code: 'be883d66-7121-53ae-be7e-e1bb588cc093' 
+        });
     } finally {
         if (!client) _client.release()
         outputExecutionTime(__filename, pgSimplePatch.name, process.hrtime(start)[1] / 1000000);
@@ -288,7 +298,11 @@ export async function pgSimpleDelete({ scheme, table, id, callback = null, clien
         if (!client) await _client.query('ROLLBACK');
 
         // Callback error
-        throw new ErrorWithCodeAndMessage({ success: false, message: "Internal server error", error_code: '1b71c5f4-b485-5dc0-b5b7-83578f25cf2c' });
+        throw new ErrorWithCodeAndMessage({ 
+            success: false, 
+            message: `Internal server error (scheme: ${scheme}, table: ${table}, id: ${id})`,
+            error_code: 'a455f906-52af-5e1a-a004-37cf00cbcd8e' 
+        });
 
     } finally {
         if (!client) _client.release()
@@ -650,7 +664,7 @@ export async function pgSimplePost({ scheme, table, keyValue = {}, callback = nu
         throw new ErrorWithCodeAndMessage({ success: false, message: "Internal server error", error_code: '5b2aba0c-2c60-5f55-bb57-c4d0dbedd15a' });
     } finally {
         if (!client) _client.release()
-        console.info('beeshift/functions/post [Execution time]: %dms', process.hrtime(start)[1] / 1000000)
+        //console.info('beeshift/functions/post [Execution time]: %dms', process.hrtime(start)[1] / 1000000)
     }
 }
 
