@@ -191,7 +191,7 @@ export async function pgSimplePatchMany({ scheme, table, data, filter = null, ke
         if (!client) await _client.query('BEGIN')
 
         // Remove forbidden keys
-        let forbiddenKeys = ['id', 'created_at', 'updated_at', 'deleted_at'];
+        let forbiddenKeys = ['id', 'created_at', 'updated_at'];
         for (let key of forbiddenKeys) {
             if (Object.keys(data).indexOf(key) >= 0) {
                 delete data[key];
@@ -548,7 +548,6 @@ export async function pgSimpleGet({ scheme, table, id = null, keys = null, filte
             ${join != undefined && join?.length > 0 ? join.map((element, _index) => element.toQuery()).join('\n') : ''}
             WHERE TRUE
                 ${id != null ? `AND ${scheme}.${table}.id = :id` : ''}
-                ${hideDeleted ? `AND ${scheme}.${table}.deleted_at IS NULL` : ''}
                 ${filter != null ? (filter as Filter[]).map((e) => `AND ${(e.where as string).replace(/\$scheme/g, scheme).replace(/\$table/g, table)}`).join('\n') : ''}
             ORDER BY 
                 ${orderByString ?? `${scheme}.${table}.updated_at DESC`}
