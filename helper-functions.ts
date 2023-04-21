@@ -5,7 +5,7 @@ import named from 'yesql';
 import moment from "moment";
 import * as uuid from 'uuid';
 import crypto from 'crypto';
-import { create, all } from 'mathjs'
+import { create, all, cos } from 'mathjs'
 import Jimp from 'jimp';
 
 //=====================================================================
@@ -59,7 +59,7 @@ export class Join {
 
 export type ValidationType = {
     name: string,
-    type: "string" | "number" | "boolean" | "date" | "time" | "id",
+    type: "string" | "number" | "boolean" | "date-time" | "date" | "time" | "id",
     required?: boolean,
     min?: number,
     max?: number,
@@ -157,9 +157,10 @@ interface PgSimplePatchInterface {
     filter?: { [index: string]: unknown } | null,
     callback?: ((result: Object) => any) | null,
     client?: PoolClient | null,
+    returnData?: boolean,
 }
-export async function pgSimplePatch({ scheme, table, key, value, filter, callback = null, client = null }: PgSimplePatchInterface): Promise<{ [index: string]: any }> {
-    return await pgSimplePatchMany({ scheme, table, data: { [key]: value }, filter, callback, client });
+export async function pgSimplePatch({ scheme, table, key, value, filter, callback = null, client = null, returnData = false }: PgSimplePatchInterface): Promise<{ [index: string]: any }> {
+    return await pgSimplePatchMany({ scheme, table, data: { [key]: value }, filter, callback, client, returnData });
 }
 
 interface PgSimplePatchInterfaceMany {
@@ -218,25 +219,18 @@ export async function pgSimplePatchMany({ scheme, table, data, filter = null, ke
             if (index == 0) return `${e} = :INSERT_${e}`;
             return `, ${e} = :INSERT_${e}`;
         }).join('\n')}
-                ${filter != null ? `WHERE ${Object.keys(filter).map((e, index) => {
+            ${filter != null ? `WHERE ${Object.keys(filter).map((e, index) => {
             if (index == 0) return `${e} = :WHERE_${e}`;
             return `AND ${e} = :WHERE_${e}`;
         }).join('\n')}` : ''}
             ${returnData ? 'RETURNING *' : ''};
         `, { useNullForMissing: true })(namedValues));
-        if (resultProfile.rowCount <= 0 || resultProfile.rowCount > 1){
-            throw new ErrorWithCodeAndMessage({ 
-                success: false, 
-                message: `Internal server error (scheme: ${scheme}, table: ${table}, data: ${data}, filter: ${filter})`, 
-                error_code: 'a455f906-52af-5e1a-a004-37cf00cbcd8e' 
-            });
-        }
 
         // Commit transaction
         if (!client) await _client.query('COMMIT')
 
         // Return machine list
-        return callbackAndReturn({ success: true, data: resultProfile.rows[0] }, callback);
+        return callbackAndReturn({ success: true, data: resultProfile.rows }, callback);
     } catch (e) {
 
         console.error(e);
@@ -244,10 +238,10 @@ export async function pgSimplePatchMany({ scheme, table, data, filter = null, ke
         // Rollback transaction
         if (!client) await _client.query('ROLLBACK');
 
-        throw new ErrorWithCodeAndMessage({ 
-            success: false, 
-            message: `Internal server error (scheme: ${scheme}, table: ${table}, data: ${JSON.stringify(data, null, 4)}, filter: ${filter})`, 
-            error_code: 'be883d66-7121-53ae-be7e-e1bb588cc093' 
+        throw new ErrorWithCodeAndMessage({
+            success: false,
+            message: `Internal server error (scheme: ${scheme}, table: ${table}, data: ${JSON.stringify(data, null, 4)}, filter: ${filter})`,
+            error_code: 'be883d66-7121-53ae-be7e-e1bb588cc093'
         });
     } finally {
         if (!client) _client.release()
@@ -263,9 +257,17 @@ interface pgSimpleDeleteInterface {
     client?: PoolClient | null,
 }
 export async function pgSimpleDelete({ scheme, table, id, callback = null, client = null }: pgSimpleDeleteInterface): Promise<{ [index: string]: any }> {
+    return await pgSimpleDeleteMany({ scheme, table, filter: { id }, callback, client: client });
+}
 
-    // Get function start time
-    const start: [number, number] = process.hrtime();
+interface pgSimpleDeleteManyInterface {
+    scheme: string,
+    table: string,
+    filter?: { [index: string]: unknown } | null,
+    callback?: ((result: Object) => any) | null,
+    client?: PoolClient | null,
+}
+export async function pgSimpleDeleteMany({ scheme, table, filter, callback = null, client = null }: pgSimpleDeleteManyInterface): Promise<{ [index: string]: any }> {
 
     // Connect to PostgreSQL-Pool
     const _client = client ?? await pool.connect()
@@ -275,14 +277,32 @@ export async function pgSimpleDelete({ scheme, table, id, callback = null, clien
         // Begin transaction
         if (!client) await _client.query('BEGIN')
 
-        // Try to insert 
-        const deleteResult = await _client.query(`
-                DELETE
-                FROM 
-                    ${scheme}.${table}
-                WHERE 
-                    id = $1
-                `, [id]);
+        // A filter must be provided
+        if (filter == null) {
+            throw new ErrorWithCodeAndMessage({
+                success: false,
+                message: `No filter provided (scheme: ${scheme}, table: ${table}, filter: ${filter})`,
+                error_code: 'cbbb7599-224f-527d-af13-62204f9b3648'
+            });
+        }
+
+        // Create named values
+        let namedValues: { [index: string]: any } = {}
+        Object.keys(filter).forEach((e) => {
+            namedValues[`WHERE_${e}`] = filter[e];
+        });
+
+        // Get requested scopes
+        const deleteResult = await _client.query(named.pg(`
+            DELETE FROM 
+                ${scheme}.${table}
+            WHERE  
+                ${Object.keys(filter).map((e, index) => {
+            if (index == 0) return `${e} = :WHERE_${e}`;
+            return `AND ${e} = :WHERE_${e}`;
+        }).join('\n')}
+            RETURNING *;
+        `, { useNullForMissing: true })(namedValues));
 
         // Commit transaction
         if (!client) await _client.query('COMMIT')
@@ -298,15 +318,14 @@ export async function pgSimpleDelete({ scheme, table, id, callback = null, clien
         if (!client) await _client.query('ROLLBACK');
 
         // Callback error
-        throw new ErrorWithCodeAndMessage({ 
-            success: false, 
-            message: `Internal server error (scheme: ${scheme}, table: ${table}, id: ${id})`,
-            error_code: 'a455f906-52af-5e1a-a004-37cf00cbcd8e' 
+        throw new ErrorWithCodeAndMessage({
+            success: false,
+            message: `Internal server error (scheme: ${scheme}, table: ${table}, filter: ${filter})`,
+            error_code: 'a455f906-52af-5e1a-a004-37cf00cbcd8e'
         });
 
     } finally {
         if (!client) _client.release()
-        outputExecutionTime(__filename, pgSimpleDelete.name, process.hrtime(start)[1] / 1000000);
     }
 }
 
@@ -317,6 +336,7 @@ interface pgSimpleGetInterface {
     keys?: string[] | null,
     filter?: Filter[] | { [index: string]: any },
     orderBy?: string | { [x: string]: string; } | null,
+    groupBy?: string | string[] | null,
     join?: Join[] | null,
     limit?: number | null,
     offset?: number | null,
@@ -328,7 +348,7 @@ interface pgSimpleGetInterface {
     callback?: ((result: Object) => any) | null,
     client?: PoolClient | null,
 }
-export async function pgSimpleGet({ scheme, table, id = null, keys = null, filter = [], request = null, orderBy = null, join = null, limit = null, offset = null, forceAsList = false, keyMapping = null, allowedKeys = null, hideDeleted = true, callback = null, client = null }: pgSimpleGetInterface): Promise<{ [index: string]: any }> {
+export async function pgSimpleGet({ scheme, table, id = null, keys = null, filter = [], request = null, orderBy = null, groupBy = null, join = null, limit = null, offset = null, forceAsList = false, keyMapping = null, allowedKeys = null, hideDeleted = true, callback = null, client = null }: pgSimpleGetInterface): Promise<{ [index: string]: any }> {
 
     // Get function start time
     const start: [number, number] = process.hrtime();
@@ -341,6 +361,7 @@ export async function pgSimpleGet({ scheme, table, id = null, keys = null, filte
         let _limit = limit;
         let _offset = offset
         let _orderBy = orderBy
+        let _groupBy: string | string[] | { [x: string]: string; } | null = groupBy
 
         // Convert filter map to array
         if (filter != null && typeof filter.length == "undefined") {
@@ -536,6 +557,25 @@ export async function pgSimpleGet({ scheme, table, id = null, keys = null, filte
             });
         }
 
+        // Convert groupBy to map if string (e.g. "id, name")
+        if (typeof _groupBy == "string") {
+            let groupByArray: string[] = [];
+            _groupBy.split(',').forEach(async (e) => {
+                groupByArray.push(e.trim());
+            })
+            _groupBy = groupByArray;
+        }
+
+        // Create group by string
+        let groupByString: string | null = null;
+        if (_groupBy != null && (_groupBy as string[]).length > 0) {
+            groupByString = "";
+            (_groupBy as string[]).forEach(async (key: string, index) => {
+                groupByString += `${scheme}.${table}.${key}`;
+                if (index < (_groupBy as string[]).length - 1) groupBy += ", ";
+            });
+        }
+
         // Get requested data
         const result = await _client.query(named.pg(`
             SELECT 
@@ -549,6 +589,7 @@ export async function pgSimpleGet({ scheme, table, id = null, keys = null, filte
             WHERE TRUE
                 ${id != null ? `AND ${scheme}.${table}.id = :id` : ''}
                 ${filter != null ? (filter as Filter[]).map((e) => `AND ${(e.where as string).replace(/\$scheme/g, scheme).replace(/\$table/g, table)}`).join('\n') : ''}
+            ${groupByString != null ? `GROUP BY ${groupByString}` : ''}
             ORDER BY 
                 ${orderByString ?? `${scheme}.${table}.updated_at DESC`}
             LIMIT 
@@ -788,16 +829,46 @@ export function validate({ value, rules }: Validate): { success: boolean, messag
 
         return { success: true };
     }
-    else if (rules.type == 'date') {
+    else if (rules.type == 'date-time') { // Formmat must be YYYY-MM-DDTHH:mm:ss.sssZ for example 22023-03-28T14:56:23.660Z
         // Validate if required and value is null or empty string
         if (!rules.required && (value == null || (typeof value === "string" && value == ''))) return { success: true };
         if (rules.required && (value == null || (typeof value === "string" && value == ''))) return { success: false, message: `${rules.name} is required`, error_code: 'b74c1bc1-4a57-582a-b42f-e4dd382540c2' };
 
+        // Check if value is moment object
+        if (value instanceof moment) {
+            if (!(value as moment.Moment).isValid()) {
+                return { success: false, message: `${rules.name} is invalid`, error_code: '810ff853-bac8-5ba7-a56f-d0cc1f8bff77' };
+            }
+            value = (value as moment.Moment).toDate();
+        }
+
         // Validate if value is a date or a string that can be converted to timestamp (number)
         if (value == null || (typeof value != "string" && !(value instanceof Date))) return { success: false, message: `${rules.name} is invalid`, error_code: 'e3bc3352-9f36-53c5-960f-db53b436246a' };
-        else if (typeof value == "string" && !/^\d{4}-\d{2}-\d{2}$/.test(value)) return { success: false, message: `${rules.name} is invalid`, error_code: 'd9958c8b-d238-5977-876b-504a134b6740' };
-        //else if (typeof value == "string") value = new Date(value).getTime();
-        //else value = value.getTime();
+        else if (typeof value == "string" && !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/.test(value)) return { success: false, message: `${rules.name} is invalid`, error_code: 'e3bc3352-9f36-53c5-960f-db53b436246a' };
+        else if (typeof value == "string") value = new Date(value);
+
+        if (rules.min && value < rules.min) return { success: false, message: `${rules.name} must be at least ${rules.min}`, error_code: 'f34944e2-3154-5bd4-8897-3c76ac65086e' };
+        if (rules.max && value > rules.max) return { success: false, message: `${rules.name} must be at most ${rules.max}`, error_code: '124a10e9-3352-5cac-85e6-c4bd1349284f' };
+
+        return { success: true };
+    }
+    else if (rules.type == 'date') {
+
+        // Validate if required and value is null or empty string
+        if (!rules.required && (value == null || (typeof value === "string" && value == ''))) return { success: true };
+        if (rules.required && (value == null || (typeof value === "string" && value == ''))) return { success: false, message: `${rules.name} is required`, error_code: 'b74c1bc1-4a57-582a-b42f-e4dd382540c2' };
+
+        // Check if value is moment object
+        if (value instanceof moment) {
+            if (!(value as moment.Moment).isValid()) {
+                return { success: false, message: `${rules.name} is invalid`, error_code: '810ff853-bac8-5ba7-a56f-d0cc1f8bff77' };
+            }
+            value = (value as moment.Moment).toDate();
+        }
+
+        // Validate if value is a date or a string that can be converted to timestamp (number)
+        if (value == null || (typeof value != "string" && !(value instanceof Date))) return { success: false, message: `${rules.name} is invalid`, error_code: 'e3bc3352-9f36-53c5-960f-db53b436246a' };
+        else if (typeof value == "string" && !/^\d{4}-\d{2}-\d{2}$/.test(value) && !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/.test(value)) return { success: false, message: `${rules.name} is invalid`, error_code: 'e3bc3352-9f36-53c5-960f-db53b436246a' };
 
         return { success: true };
     }
@@ -805,6 +876,14 @@ export function validate({ value, rules }: Validate): { success: boolean, messag
         // Validate if required and value is null or empty string
         if (!rules.required && (value == null || (typeof value === "string" && value == ''))) return { success: true, };
         if (rules.required && (value == null || (typeof value === "string" && value == ''))) return { success: false, message: `${rules.name} is required`, error_code: '29f2b4a6-4e17-5802-8c03-25130806eac7' };
+
+        // Check if value is moment object
+        if (value instanceof moment) {
+            if (!(value as moment.Moment).isValid()) {
+                return { success: false, message: `${rules.name} is invalid`, error_code: '13d5557e-69f4-5ff3-992e-c80218935a15' };
+            }
+            value = (value as moment.Moment).toDate();
+        }
 
         // Validate if value is a date or a string that can be converted to timestamp (number)
         if (value == null || (typeof value != "string" && !(value instanceof Date))) return { success: false, message: `${rules.name} is invalid`, error_code: 'e51ad5073-899e-5ee9-abb6-d92a96e3e31f' };
@@ -851,9 +930,9 @@ interface ValidateAll {
 export function validateAll({ data }: ValidateAll): { success: boolean, message?: string, error_code?: string } {
     for (const key in data) {
         const value = data[key];
-        if (value == null) continue;
-        if (value.rules == null) continue;
-        const validation = validate({ value: value.value, rules: value.rules });
+        if (value == null) continue; // Skip if value is null
+        if (value.rules == null && value.type == null) continue; // Skip if rules and type are null
+        const validation = validate({ value: value.value, rules: value.rules ? value.rules : { name: value.name, type: value.type } });
         if (!validation.success) return validation;
     }
     return { success: true };
@@ -861,10 +940,11 @@ export function validateAll({ data }: ValidateAll): { success: boolean, message?
 
 interface Convert {
     value: any,
-    type: 'string' | 'number' | 'date' | 'time' | 'boolean',
+    type: 'string' | 'number' | 'date-time' | 'date' | 'time' | 'boolean',
     rules?: any,
 }
 export function convert({ value, type, rules = {} }: Convert): any {
+
     // Return null if value is null and not required
     if (!rules.required && value == null) return null;
 
@@ -904,19 +984,27 @@ export function convert({ value, type, rules = {} }: Convert): any {
 
         return value
     }
-    else if (type == 'date') { // Return as timestamp
+    else if (type == 'date-time') { // Return as date object
 
         // Convert if value is a string
-        if (typeof value == "string") value = new Date(value).getTime();
-        else value = value.getTime();
+        if (typeof value == "string") value = new Date(value);
+        else value = new Date(value);
 
         return value
     }
-    else if (type == 'time') { // Return as timestamp
+    else if (type == 'date') { // Return as date object
 
         // Convert if value is a string
-        if (typeof value == "string") value = new Date(value).getTime();
-        else value = value.getTime();
+        if (typeof value == "string") value = new Date(value);
+        else value = new Date(value);
+
+        return value
+    }
+    else if (type == 'time') { // Return as date object
+
+        // Convert if value is a string
+        if (typeof value == "string") value = new Date(value);
+        else value = new Date(value);
 
         return value
     }
