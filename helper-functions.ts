@@ -704,7 +704,6 @@ export async function pgSimplePost({ scheme, table, keyValue = {}, callback = nu
         throw new ErrorWithCodeAndMessage({ success: false, message: "Internal server error", error_code: '5b2aba0c-2c60-5f55-bb57-c4d0dbedd15a' });
     } finally {
         if (!client) _client.release()
-        //console.info('beeshift/functions/post [Execution time]: %dms', process.hrtime(start)[1] / 1000000)
     }
 }
 
