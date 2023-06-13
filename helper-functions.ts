@@ -347,8 +347,9 @@ interface pgSimpleGetInterface {
     hideDeleted?: boolean,
     callback?: ((result: Object) => any) | null,
     client?: PoolClient | null,
+    debug?: boolean,
 }
-export async function pgSimpleGet({ scheme, table, id = null, keys = null, filter = [], request = null, orderBy = null, groupBy = null, join = null, limit = null, offset = null, forceAsList = false, keyMapping = null, allowedKeys = null, hideDeleted = true, callback = null, client = null }: pgSimpleGetInterface): Promise<{ [index: string]: any }> {
+export async function pgSimpleGet({ scheme, table, id = null, keys = null, filter = [], request = null, orderBy = null, groupBy = null, join = null, limit = null, offset = null, forceAsList = false, keyMapping = null, allowedKeys = null, hideDeleted = true, callback = null, client = null, debug = false }: pgSimpleGetInterface): Promise<{ [index: string]: any }> {
 
     // Get function start time
     const start: [number, number] = process.hrtime();
@@ -528,10 +529,10 @@ export async function pgSimpleGet({ scheme, table, id = null, keys = null, filte
         if (filter != null) {
             (filter as Filter[]).forEach((e) => {
                 // Skip if key is id
-                if (e.id == "id") return;
+                if (e.where == "id") return;
 
                 // Add to named values
-                namedValues[e.id] = e.value
+                namedValues[`FILTER_${e.where}`] = e.value;
             });
         }
 
@@ -577,7 +578,7 @@ export async function pgSimpleGet({ scheme, table, id = null, keys = null, filte
         }
 
         // Get requested data
-        const result = await _client.query(named.pg(`
+        const namedQuery = named.pg(`
             SELECT 
                 ${scheme}.${table}.id, 
                 FLOOR(EXTRACT(EPOCH FROM ${scheme}.${table}.created_at)) AS created_at,
@@ -588,7 +589,7 @@ export async function pgSimpleGet({ scheme, table, id = null, keys = null, filte
             ${join != undefined && join?.length > 0 ? join.map((element, _index) => element.toQuery()).join('\n') : ''}
             WHERE TRUE
                 ${id != null ? `AND ${scheme}.${table}.id = :id` : ''}
-                ${filter != null ? (filter as Filter[]).map((e) => `AND ${(e.where as string).replace(/\$scheme/g, scheme).replace(/\$table/g, table)}`).join('\n') : ''}
+                ${filter != null ? (filter as Filter[]).map((e) => `AND ${(e.where as string).replace(/\$scheme/g, scheme).replace(/\$table/g, table)} = :FILTER_${e.where}`).join('\n') : ''}
             ${groupByString != null ? `GROUP BY ${groupByString}` : ''}
             ORDER BY 
                 ${orderByString ?? `${scheme}.${table}.updated_at DESC`}
@@ -596,7 +597,9 @@ export async function pgSimpleGet({ scheme, table, id = null, keys = null, filte
                 :limit
             OFFSET
                 :offset
-        `, { useNullForMissing: true })(namedValues));
+        `, { useNullForMissing: true })(namedValues);
+        if(debug) console.log(namedQuery);
+        const result = await _client.query(namedQuery);
         if (result.rowCount < 0) throw new ErrorWithCodeAndMessage({ success: false, message: "Internal server error", error_code: '561c1368-5626-5ae3-af8d-a153eb59d499' });
 
         // Return list
