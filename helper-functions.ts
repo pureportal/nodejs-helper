@@ -31,9 +31,8 @@ export enum JoinType {
 //=====================================================================
 
 export type Filter = {
-    id: string,
     where: string,
-    value?: any | any[],
+    values?: { [key: string]: any },
 }
 
 interface JoinInterface {
@@ -46,13 +45,13 @@ export class Join {
     from: string;
     on: string;
 
-    constructor({ type, from, on }: JoinInterface) {
+    constructor ({ type, from, on }: JoinInterface) {
         this.type = type;
         this.from = from;
         this.on = on;
     }
 
-    toQuery() {
+    toQuery () {
         return `${this.type} ${this.from} ON ${this.on}`;
     }
 }
@@ -72,16 +71,16 @@ export type ValidationType = {
 //== Functions
 //=====================================================================
 
-export function outputExecutionTime(fileName: string, functionName: string, executionTime: number) {
+export function outputExecutionTime (fileName: string, functionName: string, executionTime: number) {
     //console.info(fileName.replace((global as any).appRoot, "~") + ':' + functionName + ' [Execution time]: %dms', executionTime);
 }
 
-export function callbackAndReturn(data: any, callback?: ((result: any) => any) | null): any {
+export function callbackAndReturn (data: any, callback?: ((result: any) => any) | null): any {
     if (callback) callback(data);
     return data
 }
 
-export function isDebug() {
+export function isDebug () {
     return process.env.NODE_ENV !== 'production';
 };
 
@@ -97,8 +96,9 @@ export interface getParameterFromRequestResult {
     limit: number | null;
     offset: number | null;
     orderBy: { [x: string]: string; } | null;
+    additionalData: { [x: string]: any; } | null;
 }
-export async function getParameterFromRequest(request: Request): Promise<getParameterFromRequestResult> {
+export async function getParameterFromRequest (request: Request): Promise<getParameterFromRequestResult> {
     const filter = typeof request.query.search == "string" ? JSON.parse(request.query.search) : typeof request.query.filter == "string" ? JSON.parse(request.query.filter) : typeof request.query.search == "object" ? request.query.search : typeof request.query.filter == "object" ? request.query.filter : null;
     const limit = typeof request.query.limit == "string" && !Number.isNaN(parseInt(request.query.limit)) ? parseInt(request.query.limit) : null;
     const offset = typeof request.query.offset == "string" && !Number.isNaN(parseInt(request.query.offset)) ? parseInt(request.query.offset) : null;
@@ -132,14 +132,25 @@ export async function getParameterFromRequest(request: Request): Promise<getPara
         orderBy = null;
     }
 
-    return { filter: filter, limit: limit, offset: offset, orderBy: orderBy };
+    // Check if additional data is provided (every other query parameter)
+    let additionalData: { [x: string]: any; } | null = null;
+    if (request.query) {
+        additionalData = {};
+        for (const key in request.query) {
+            if (key != 'search' && key != 'filter' && key != 'limit' && key != 'offset' && key != 'order_by' && key != 'orderBy') {
+                additionalData[key] = request.query[key];
+            }
+        }
+    }
+
+    return { filter: filter, limit: limit, offset: offset, orderBy: orderBy, additionalData: additionalData };
 }
 
 interface PgMapKeyNameInterface {
     key: string,
     mapping: { [index: string]: string } | null,
 }
-export async function pgMapKeyName({ key, mapping }: PgMapKeyNameInterface): Promise<string> {
+export async function pgMapKeyName ({ key, mapping }: PgMapKeyNameInterface): Promise<string> {
     if (mapping != null && Object.keys(mapping).indexOf(key) >= 0) {
         return mapping[key];
     }
@@ -152,28 +163,14 @@ export async function pgMapKeyName({ key, mapping }: PgMapKeyNameInterface): Pro
 interface PgSimplePatchInterface {
     scheme: string,
     table: string,
-    key: string,
-    value: unknown,
-    filter?: { [index: string]: unknown } | null,
-    callback?: ((result: Object) => any) | null,
-    client?: PoolClient | null,
-    returnData?: boolean,
-}
-export async function pgSimplePatch({ scheme, table, key, value, filter, callback = null, client = null, returnData = false }: PgSimplePatchInterface): Promise<{ [index: string]: any }> {
-    return await pgSimplePatchMany({ scheme, table, data: { [key]: value }, filter, callback, client, returnData });
-}
-
-interface PgSimplePatchInterfaceMany {
-    scheme: string,
-    table: string,
+    id?: string | null,
     data: { [index: string]: unknown },
-    filter?: { [index: string]: unknown } | null,
-    keyMapping?: { [index: string]: string } | null,
+    filter?: Filter[] | { [index: string]: any },
     callback?: ((result: Object) => any) | null,
     client?: PoolClient | null,
     returnData?: boolean,
 }
-export async function pgSimplePatchMany({ scheme, table, data, filter = null, keyMapping = null, callback = null, client = null, returnData = false }: PgSimplePatchInterfaceMany): Promise<{ [index: string]: any }> {
+export async function pgSimplePatch ({ scheme, table, data, id = null, filter = [], callback = null, client = null, returnData = false }: PgSimplePatchInterface): Promise<{ [index: string]: any }> {
 
     // Get function start time
     const start: [number, number] = process.hrtime();
@@ -181,8 +178,22 @@ export async function pgSimplePatchMany({ scheme, table, data, filter = null, ke
     // Connect to PostgreSQL-Pool
     const _client = client ?? await pool.connect()
 
+    // Convert filter map to array
+    if (filter != null && typeof filter.length == "undefined") {
+        let newFilter: Filter[] = []
+        for (let [key, value] of Object.entries(filter)) {
+            let id = crypto.randomBytes(20).toString('hex');
+            newFilter.push({
+                where: `${scheme}.${table}.${key} = :${id}`,
+                values: { [id]: value }
+            })
+        }
+        filter = newFilter;
+    }
+
     // Validate data
     if (Object.keys(data).length == 0) {
+        console.warn(`pgSimplePatch: No data provided for ${scheme}.${table}`);
         return callbackAndReturn({ success: true }, callback);
     }
 
@@ -200,37 +211,42 @@ export async function pgSimplePatchMany({ scheme, table, data, filter = null, ke
         }
 
         // Create named values
-        let namedValues: { [index: string]: any } = {}
+        let namedValues: { [index: string]: any } = {
+            id: id,
+        }
         Object.keys(data).forEach((e) => {
             namedValues[`INSERT_${e}`] = data[e];
         });
+        // Add filter values
         if (filter != null) {
-            Object.keys(filter).forEach((e) => {
-                namedValues[`WHERE_${e}`] = filter[e];
+            (filter as Filter[]).forEach((e: Filter) => {
+                Object.keys(e.values ?? []).forEach((key) => {
+                    namedValues[key] = e.values![key];
+                })
             });
         }
 
         // Get requested scopes
-        const resultProfile = await _client.query(named.pg(`
+        const namedQuery = named.pg(`
             UPDATE 
                 ${scheme}.${table}
             SET 
-            ${Object.keys(data).map((e, index) => {
+                ${Object.keys(data).map((e, index) => {
             if (index == 0) return `${e} = :INSERT_${e}`;
             return `, ${e} = :INSERT_${e}`;
         }).join('\n')}
-            ${filter != null ? `WHERE ${Object.keys(filter).map((e, index) => {
-            if (index == 0) return `${e} = :WHERE_${e}`;
-            return `AND ${e} = :WHERE_${e}`;
-        }).join('\n')}` : ''}
+            WHERE TRUE
+                ${id != null ? `AND ${scheme}.${table}.id = :id` : ''}
+                ${filter != null ? (filter as Filter[]).map((e) => `AND ${(e.where as string).replace(/\$scheme/g, scheme).replace(/\$table/g, table)}\n`).join('') : ''}
             ${returnData ? 'RETURNING *' : ''};
-        `, { useNullForMissing: true })(namedValues));
+        `, { useNullForMissing: true })(namedValues)
+        const resultProfile = await _client.query(namedQuery)
 
         // Commit transaction
         if (!client) await _client.query('COMMIT')
 
         // Return machine list
-        return callbackAndReturn({ success: true, data: resultProfile.rows }, callback);
+        return callbackAndReturn({ success: true, data: resultProfile.rows.length == 1 ? resultProfile.rows[0] : resultProfile.rows }, callback);
     } catch (e) {
 
         console.error(e);
@@ -252,22 +268,13 @@ export async function pgSimplePatchMany({ scheme, table, data, filter = null, ke
 interface pgSimpleDeleteInterface {
     scheme: string,
     table: string,
-    id: string,
+    id?: string | null,
+    filter?: Filter[] | { [index: string]: any },
+    keyMapping?: { [index: string]: string } | null,
     callback?: ((result: Object) => any) | null,
     client?: PoolClient | null,
 }
-export async function pgSimpleDelete({ scheme, table, id, callback = null, client = null }: pgSimpleDeleteInterface): Promise<{ [index: string]: any }> {
-    return await pgSimpleDeleteMany({ scheme, table, filter: { id }, callback, client: client });
-}
-
-interface pgSimpleDeleteManyInterface {
-    scheme: string,
-    table: string,
-    filter?: { [index: string]: unknown } | null,
-    callback?: ((result: Object) => any) | null,
-    client?: PoolClient | null,
-}
-export async function pgSimpleDeleteMany({ scheme, table, filter, callback = null, client = null }: pgSimpleDeleteManyInterface): Promise<{ [index: string]: any }> {
+export async function pgSimpleDelete ({ scheme, table, id = null, keyMapping = null, filter = [], callback = null, client = null }: pgSimpleDeleteInterface): Promise<{ [index: string]: any }> {
 
     // Connect to PostgreSQL-Pool
     const _client = client ?? await pool.connect()
@@ -277,8 +284,21 @@ export async function pgSimpleDeleteMany({ scheme, table, filter, callback = nul
         // Begin transaction
         if (!client) await _client.query('BEGIN')
 
+        // Convert filter map to array
+        if (filter != null && typeof filter.length == "undefined") {
+            let newFilter: Filter[] = []
+            for (let [key, value] of Object.entries(filter)) {
+                let id = crypto.randomBytes(20).toString('hex');
+                newFilter.push({
+                    where: `${scheme}.${table}.${key} = :${id}`,
+                    values: { [id]: value }
+                })
+            }
+            filter = newFilter;
+        }
+
         // A filter must be provided
-        if (filter == null) {
+        if (!id && (!filter || filter.length == 0)) {
             throw new ErrorWithCodeAndMessage({
                 success: false,
                 message: `No filter provided (scheme: ${scheme}, table: ${table}, filter: ${filter})`,
@@ -287,22 +307,28 @@ export async function pgSimpleDeleteMany({ scheme, table, filter, callback = nul
         }
 
         // Create named values
-        let namedValues: { [index: string]: any } = {}
-        Object.keys(filter).forEach((e) => {
-            namedValues[`WHERE_${e}`] = filter[e];
-        });
+        let namedValues: { [index: string]: any } = {
+            id: id
+        }
+        // Add filter values
+        if (filter != null) {
+            (filter as Filter[]).forEach((e: Filter) => {
+                Object.keys(e.values ?? []).forEach((key) => {
+                    namedValues[key] = e.values![key];
+                })
+            });
+        }
 
         // Get requested scopes
-        const deleteResult = await _client.query(named.pg(`
+        const namedQuery = named.pg(`
             DELETE FROM 
                 ${scheme}.${table}
-            WHERE  
-                ${Object.keys(filter).map((e, index) => {
-            if (index == 0) return `${e} = :WHERE_${e}`;
-            return `AND ${e} = :WHERE_${e}`;
-        }).join('\n')}
+            WHERE TRUE
+                ${id != null ? `AND ${scheme}.${table}.id = :id` : ''}
+                ${filter != null ? (filter as Filter[]).map((e) => `AND ${(e.where as string).replace(/\$scheme/g, scheme).replace(/\$table/g, table)}\n`).join('') : ''}
             RETURNING *;
-        `, { useNullForMissing: true })(namedValues));
+        `, { useNullForMissing: true })(namedValues)
+        const deleteResult = await _client.query(namedQuery);
 
         // Commit transaction
         if (!client) await _client.query('COMMIT')
@@ -349,7 +375,7 @@ interface pgSimpleGetInterface {
     client?: PoolClient | null,
     debug?: boolean,
 }
-export async function pgSimpleGet({ scheme, table, id = null, keys = null, filter = [], request = null, orderBy = null, groupBy = null, join = null, limit = null, offset = null, forceAsList = false, keyMapping = null, allowedKeys = null, hideDeleted = true, callback = null, client = null, debug = false }: pgSimpleGetInterface): Promise<{ [index: string]: any }> {
+export async function pgSimpleGet ({ scheme, table, id = null, keys = null, filter = [], request = null, orderBy = null, groupBy = null, join = null, limit = null, offset = null, forceAsList = false, keyMapping = null, allowedKeys = null, hideDeleted = true, callback = null, client = null, debug = false }: pgSimpleGetInterface): Promise<{ [index: string]: any }> {
 
     // Get function start time
     const start: [number, number] = process.hrtime();
@@ -368,13 +394,38 @@ export async function pgSimpleGet({ scheme, table, id = null, keys = null, filte
         if (filter != null && typeof filter.length == "undefined") {
             let newFilter: Filter[] = []
             for (let [key, value] of Object.entries(filter)) {
+                // Validate key -> Should be in allowedKeys
+                if (allowedKeys != null && !allowedKeys.includes(key)) {
+                    throw new ErrorWithCodeAndMessage({
+                        success: false,
+                        message: `Key not allowed (scheme: ${scheme}, table: ${table}, key: ${key})`,
+                        error_code: 'a455f906-52af-5e1a-a004-37cf00cbcd8e'
+                    });
+                }
                 key = await pgMapKeyName({ key: key, mapping: keyMapping });
                 let id = crypto.randomBytes(20).toString('hex');
-                newFilter.push({
-                    id: id,
-                    where: `${scheme}.${table}.${key} = :${id}`,
-                    value: value,
-                })
+                if(value == null || value == 'null' || value == 'NULL'){
+                    newFilter.push({
+                        where: `${scheme}.${table}.${key} IS NULL`,
+                    })
+                }
+                else if (value == 'NOT NULL' || value == 'not null'){
+                    newFilter.push({
+                        where: `${scheme}.${table}.${key} IS NOT NULL`,
+                    })
+                }
+                else if (Array.isArray(value)){
+                    newFilter.push({
+                        where: `${scheme}.${table}.${key} IN (:${id})`,
+                        values: { [id]: value }
+                    })
+                }
+                else{
+                    newFilter.push({
+                        where: `${scheme}.${table}.${key} = :${id}`,
+                        values: { [id]: value }
+                    })
+                }
             }
             filter = newFilter;
         }
@@ -399,9 +450,7 @@ export async function pgSimpleGet({ scheme, table, id = null, keys = null, filte
                     while (regExp.test(search)) {
                         const result = regExp.exec(search);
                         if (result) {
-                            let filterId = crypto.randomBytes(20).toString('hex');
                             filter.push({
-                                id: filterId,
                                 where: `${scheme}.${table}.${await pgMapKeyName({ key: result[1], mapping: keyMapping })} IS NULL`,
                             });
                             search = search.replace(result[0], "").trim();
@@ -418,16 +467,15 @@ export async function pgSimpleGet({ scheme, table, id = null, keys = null, filte
                             let filterId = crypto.randomBytes(20).toString('hex');
                             if (result.indexOf("null") >= 0) {
                                 filter.push({
-                                    id: filterId,
                                     where: `(${scheme}.${table}.${await pgMapKeyName({ key: result[1], mapping: keyMapping })} = :${filterId} OR ${scheme}.${table}.${await pgMapKeyName({ key: result[1], mapping: keyMapping })} IS NULL)`,
-                                    value: result[2],
+                                    values: { [filterId]: result[2] },
                                 });
                             }
                             else {
                                 filter.push({
                                     id: filterId,
                                     where: `${scheme}.${table}.${await pgMapKeyName({ key: result[1], mapping: keyMapping })} = :${filterId}`,
-                                    value: result[2],
+                                    values: { [filterId]: result[2] },
                                 });
                             }
                             search = search.replace(result[0], "").trim();
@@ -444,16 +492,14 @@ export async function pgSimpleGet({ scheme, table, id = null, keys = null, filte
                             let filterId = crypto.randomBytes(20).toString('hex');
                             if (result.indexOf("null") >= 0) {
                                 filter.push({
-                                    id: filterId,
                                     where: `(${scheme}.${table}.${await pgMapKeyName({ key: result[1], mapping: keyMapping })} = :${filterId} OR ${scheme}.${table}.${await pgMapKeyName({ key: result[1], mapping: keyMapping })} IS NULL)`,
-                                    value: result[2] == "true" ? true : result[2] == "false" ? false : null,
+                                    values: { [filterId]: result[2] == "true" ? true : result[2] == "false" ? false : null },
                                 });
                             }
                             else {
                                 filter.push({
-                                    id: filterId,
                                     where: `${scheme}.${table}.${await pgMapKeyName({ key: result[1], mapping: keyMapping })} = :${filterId}`,
-                                    value: result[2] == "true" ? true : result[2] == "false" ? false : null,
+                                    values: { [filterId]: result[2] == "true" ? true : result[2] == "false" ? false : null },
                                 });
                             }
                             search = search.replace(result[0], "").trim();
@@ -470,16 +516,15 @@ export async function pgSimpleGet({ scheme, table, id = null, keys = null, filte
                             let filterId = crypto.randomBytes(20).toString('hex');
                             if (result.indexOf("null") >= 0) {
                                 filter.push({
-                                    id: filterId,
                                     where: `(${scheme}.${table}.${await pgMapKeyName({ key: result[1], mapping: keyMapping })} = :${filterId} OR ${scheme}.${table}.${await pgMapKeyName({ key: result[1], mapping: keyMapping })} IS NULL)`,
-                                    value: result[2],
+                                    values: { [filterId]: result[2] },
                                 });
                             }
                             else {
                                 filter.push({
                                     id: filterId,
                                     where: `${scheme}.${table}.${await pgMapKeyName({ key: result[1], mapping: keyMapping })} = :${filterId}`,
-                                    value: result[2],
+                                    values: { [filterId]: result[2] },
                                 });
                             }
                             search = search.replace(result[0], "").trim();
@@ -496,16 +541,14 @@ export async function pgSimpleGet({ scheme, table, id = null, keys = null, filte
                             let filterId = crypto.randomBytes(20).toString('hex');
                             if (result.indexOf("null") >= 0) {
                                 filter.push({
-                                    id: filterId,
                                     where: `(${scheme}.${table}.${await pgMapKeyName({ key: result[1], mapping: keyMapping })} = :${filterId} OR ${scheme}.${table}.${await pgMapKeyName({ key: result[1], mapping: keyMapping })} IS NULL)`,
-                                    value: result[2],
+                                    values: { [filterId]: result[2] },
                                 });
                             }
                             else {
                                 filter.push({
-                                    id: filterId,
                                     where: `${scheme}.${table}.${await pgMapKeyName({ key: result[1], mapping: keyMapping })} = :${filterId}`,
-                                    value: result[2],
+                                    values: { [filterId]: result[2] },
                                 });
                             }
                             search = search.replace(result[0], "").trim();
@@ -526,13 +569,13 @@ export async function pgSimpleGet({ scheme, table, id = null, keys = null, filte
             limit: (_limit === -1 ? '9223372036854775807' : _limit) ?? '9223372036854775807',
             offset: (_offset === -1 ? 0 : _offset) ?? 0,
         }
-        if (filter != null) {
-            (filter as Filter[]).forEach((e) => {
-                // Skip if key is id
-                if (e.where == "id") return;
 
-                // Add to named values
-                namedValues[`FILTER_${e.where}`] = e.value;
+        // Add filter values
+        if (filter != null) {
+            (filter as Filter[]).forEach((e: Filter) => {
+                Object.keys(e.values ?? []).forEach((key) => {
+                    namedValues[key] = e.values![key];
+                })
             });
         }
 
@@ -589,7 +632,7 @@ export async function pgSimpleGet({ scheme, table, id = null, keys = null, filte
             ${join != undefined && join?.length > 0 ? join.map((element, _index) => element.toQuery()).join('\n') : ''}
             WHERE TRUE
                 ${id != null ? `AND ${scheme}.${table}.id = :id` : ''}
-                ${filter != null ? (filter as Filter[]).map((e) => `AND ${(e.where as string).replace(/\$scheme/g, scheme).replace(/\$table/g, table)} = :FILTER_${e.where}`).join('\n') : ''}
+                ${filter != null ? (filter as Filter[]).map((e) => `AND ${(e.where as string).replace(/\$scheme/g, scheme).replace(/\$table/g, table)}\n`).join('') : ''}
             ${groupByString != null ? `GROUP BY ${groupByString}` : ''}
             ORDER BY 
                 ${orderByString ?? `${scheme}.${table}.updated_at DESC`}
@@ -598,14 +641,14 @@ export async function pgSimpleGet({ scheme, table, id = null, keys = null, filte
             OFFSET
                 :offset
         `, { useNullForMissing: true })(namedValues);
-        if(debug) console.log(namedQuery);
+        if (debug) console.log(namedQuery);
         const result = await _client.query(namedQuery);
         if (result.rowCount < 0) throw new ErrorWithCodeAndMessage({ success: false, message: "Internal server error", error_code: '561c1368-5626-5ae3-af8d-a153eb59d499' });
 
         // Return list
         return callbackAndReturn({ success: true, data: (id != null || result.rows.length == 1) && !forceAsList ? result.rows[0] : result.rows }, callback);
     } catch (e) {
-        console.warn(e)
+        console.warn(`Failed to get data from ${scheme}.${table} with id ${id} and filter ${JSON.stringify(filter)}: ${(e as any)?.message ?? e}`);
         throw new ErrorWithCodeAndMessage({ success: false, message: "Internal server error", error_code: '98b4307f-79e0-5490-b5d0-bd5cf037ff5a' });
     } finally {
         if (!client) _client.release()
@@ -621,7 +664,7 @@ interface pgSimpleGetLastUpdateInterface {
     callback?: ((result: Object) => any) | null,
     client?: PoolClient | null,
 }
-export async function pgSimpleGetLastUpdate({ scheme, table, id = null, filter = null, callback = null, client = null }: pgSimpleGetLastUpdateInterface): Promise<{ [index: string]: any }> {
+export async function pgSimpleGetLastUpdate ({ scheme, table, id = null, filter = null, callback = null, client = null }: pgSimpleGetLastUpdateInterface): Promise<{ [index: string]: any }> {
 
     // Get function start time
     const start: [number, number] = process.hrtime();
@@ -673,7 +716,7 @@ interface pgSimplePostInterface {
     client?: PoolClient | null,
     returnData?: boolean,
 }
-export async function pgSimplePost({ scheme, table, keyValue = {}, callback = null, client = null, returnData = true }: pgSimplePostInterface): Promise<{ [index: string]: any }> {
+export async function pgSimplePost ({ scheme, table, keyValue = {}, callback = null, client = null, returnData = true }: pgSimplePostInterface): Promise<{ [index: string]: any }> {
 
     // Get function start time
     const start: [number, number] = process.hrtime();
@@ -719,7 +762,7 @@ interface IsCalculableValueType {
     min?: number | null,
     max?: number | null,
 }
-export function isCalculableValue({ value, min = null, max = null }: IsCalculableValueType): { [index: string]: any } {
+export function isCalculableValue ({ value, min = null, max = null }: IsCalculableValueType): { [index: string]: any } {
     if (value == null || (typeof value != "number" && typeof value != "string")) throw new ErrorWithCodeAndMessage({ success: false, message: "Invalid number or not calculable", error_code: 'f8a63c07-4c42-5219-ba65-579ce0ef05d1' });
     else if (typeof value == "string") {
         try {
@@ -740,7 +783,7 @@ interface IsNumberType {
     max?: number | null,
     isInteger?: boolean,
 }
-export function isNumber({ value, min = null, max = null, isInteger = false }: IsNumberType): { [index: string]: any } {
+export function isNumber ({ value, min = null, max = null, isInteger = false }: IsNumberType): { [index: string]: any } {
     if (value == null || (typeof value != "number" && typeof value != "string")) throw new ErrorWithCodeAndMessage({ success: false, message: "Invalid number", error_code: '2d316e51-be57-54b4-82c9-3f0cf53ddbf3' });
     else if (typeof value == "string") {
         try {
@@ -759,7 +802,7 @@ export function isNumber({ value, min = null, max = null, isInteger = false }: I
 interface IsDate {
     value: String | Date,
 }
-export function isDate({ value }: IsDate): { [index: string]: any } {
+export function isDate ({ value }: IsDate): { [index: string]: any } {
     if (value == null || (typeof value != "string" && !(value instanceof Date))) throw new ErrorWithCodeAndMessage({ success: false, message: "Invalid date", error_code: '9b9a586b-33bb-5f01-9e9b-6b4b60943a15' });
     else if (typeof value == "string" && !moment(value, 'YYYY-MM-DD', true).isValid()) throw new ErrorWithCodeAndMessage({ success: false, message: "Invalid date", error_code: 'b8b8331b-0b75-503c-b4fc-7c6b8377382d' });
     return { success: true }
@@ -769,7 +812,7 @@ interface IsTime {
     value: String | number,
     withSecoonds?: boolean,
 }
-export function isTime({ value, withSecoonds = false }: IsTime): { [index: string]: any } {
+export function isTime ({ value, withSecoonds = false }: IsTime): { [index: string]: any } {
     if (value == null || (typeof value != "string" && typeof value != "number")) throw new ErrorWithCodeAndMessage({ success: false, message: "Invalid time", error_code: 'd441bb41-c585-527c-a884-29d90953d365' });
     else if (typeof value == "string") {
         if (withSecoonds && !moment(value, 'hh:mm:ss', true).isValid()) throw new ErrorWithCodeAndMessage({ success: false, message: "Invalid time", error_code: 'fa231660-aecc-5cec-ab23-1f170cf8f40d' });
@@ -784,7 +827,7 @@ export function isTime({ value, withSecoonds = false }: IsTime): { [index: strin
 interface IsBoolean {
     value: String | boolean,
 }
-export function isBoolean({ value }: IsBoolean): { [index: string]: any } {
+export function isBoolean ({ value }: IsBoolean): { [index: string]: any } {
     if (value == null || (typeof value != "string" && typeof value != "boolean")) throw new ErrorWithCodeAndMessage({ success: false, message: "Invalid boolean", error_code: '36c526fc-45c5-5f64-aeff-62cd23b9396d' });
     else if (typeof value == "string" && !(/^(?:TRUE|FALSE)$/i.test(value))) throw new ErrorWithCodeAndMessage({ success: false, message: "Invalid boolean", error_code: '9cd04962-a5f6-5850-accc-dd6a552a863f' });
     return { success: true }
@@ -794,7 +837,7 @@ interface Validate {
     value: any,
     rules: ValidationType
 }
-export function validate({ value, rules }: Validate): { success: boolean, message?: string, error_code?: string } {
+export function validate ({ value, rules }: Validate): { success: boolean, message?: string, error_code?: string } {
     if (rules.type == 'string') {
         // Validate if required and value is null or empty string
         if (!rules.required && (value == null || value == '')) return { success: true };
@@ -929,7 +972,7 @@ interface ValidateAll {
     // Data as list of { name, value, type, rules }
     data: any,
 }
-export function validateAll({ data }: ValidateAll): { success: boolean, message?: string, error_code?: string } {
+export function validateAll ({ data }: ValidateAll): { success: boolean, message?: string, error_code?: string } {
     for (const key in data) {
         const value = data[key];
         if (value == null) continue; // Skip if value is null
@@ -945,7 +988,7 @@ interface Convert {
     type: 'string' | 'number' | 'date-time' | 'date' | 'time' | 'boolean',
     rules?: any,
 }
-export function convert({ value, type, rules = {} }: Convert): any {
+export function convert ({ value, type, rules = {} }: Convert): any {
 
     // Return null if value is null and not required
     if (!rules.required && value == null) return null;
@@ -1045,7 +1088,7 @@ export { limitedMathCalculator }
 interface ConvertToBoolean {
     value: String | boolean,
 }
-export function convertToBoolean({ value }: ConvertToBoolean): boolean {
+export function convertToBoolean ({ value }: ConvertToBoolean): boolean {
     if (typeof value == "string") {
         if (/^TRUE$/i.test(value)) return true;
         else if (/^FALSE$/i.test(value)) return false;
@@ -1062,7 +1105,7 @@ export class ErrorWithCodeAndMessage extends Error {
 
     public result: { [index: string]: any };
 
-    constructor(result: { [index: string]: any }) {
+    constructor (result: { [index: string]: any }) {
         super(result.message);
         this.result = result;
     }
