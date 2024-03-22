@@ -5,6 +5,7 @@ import named from 'yesql';
 import moment from "moment";
 import crypto from 'crypto';
 import { create, all } from 'mathjs'
+import { logging } from "~/logging";
 
 //=====================================================================
 //== Enums
@@ -622,8 +623,7 @@ export async function pgSimpleGet ({ scheme, table, id = null, keys = null, filt
         const namedQuery = named.pg(`
             SELECT 
                 ${scheme}.${table}.id, 
-                FLOOR(EXTRACT(EPOCH FROM ${scheme}.${table}.created_at)) AS created_at,
-                FLOOR(EXTRACT(EPOCH FROM ${scheme}.${table}.updated_at)) AS updated_at${keys != null && keys.length > 0 ? ',' : ''}
+                FLOOR(EXTRACT(EPOCH FROM ${scheme}.${table}.created_at)) AS created_at${keys != null && keys.length > 0 ? ',' : ''}
                 ${keys != null ? keys?.map((element, _index) => /^[a-z\_]$/.test(element) ? `${scheme}.${table}.${element}\n` : `${element}`) : ''}
             FROM 
                 ${scheme}.${table}
@@ -633,13 +633,13 @@ export async function pgSimpleGet ({ scheme, table, id = null, keys = null, filt
                 ${filter != null ? (filter as Filter[]).map((e) => `AND ${(e.where as string).replace(/\$scheme/g, scheme).replace(/\$table/g, table)}\n`).join('') : ''}
             ${groupByString != null ? `GROUP BY ${groupByString}` : ''}
             ORDER BY 
-                ${orderByString ?? `${scheme}.${table}.updated_at DESC`}
+                ${orderByString ?? `${scheme}.${table}.created_at DESC`}
             LIMIT 
                 :limit
             OFFSET
                 :offset
         `, { useNullForMissing: true })(namedValues);
-        if (debug) console.log(namedQuery);
+        //if (debug) logging.log(namedQuery);
         const result = await _client.query(namedQuery);
         if (result.rowCount < 0) throw new ErrorWithCodeAndMessage({ success: false, message: "Internal server error", error_code: '561c1368-5626-5ae3-af8d-a153eb59d499' });
 
@@ -676,15 +676,14 @@ export async function pgSimpleGetLastUpdate ({ scheme, table, id = null, filter 
         const result = await _client.query(named.pg(`
             SELECT 
                 ${scheme}.${table}.id, 
-                FLOOR(EXTRACT(EPOCH FROM ${scheme}.${table}.created_at)) AS created_at,
-                FLOOR(EXTRACT(EPOCH FROM ${scheme}.${table}.created_at)) AS updated_at
+                FLOOR(EXTRACT(EPOCH FROM ${scheme}.${table}.created_at)) AS created_at
             FROM 
                 ${scheme}.${table}
             WHERE TRUE
                 ${id != null ? `AND ${scheme}.${table}.id = :id` : ''}
                 ${filter != null ? Object.keys(filter).map((e, index) => `AND ${scheme}.${table}.${e} = :${e}`).join('\n') : ''}
             ORDER BY 
-                updated_at DESC
+                created_at DESC
             LIMIT 
                 1
             `, { useNullForMissing: true })({
