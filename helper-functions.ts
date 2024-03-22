@@ -1,11 +1,13 @@
 import { PoolClient } from "pg";
-import { pool } from "~/postgres";
+import { pool } from "~/lib/3rdParty/nodejs-helper/postgres.js";
 import { Request } from "express";
 import named from 'yesql';
 import moment from "moment";
 import crypto from 'crypto';
 import { create, all } from 'mathjs'
 import { logging } from "~/logging";
+
+import logging from "./logging.js";
 
 //=====================================================================
 //== Enums
@@ -71,7 +73,7 @@ export type ValidationType = {
 //=====================================================================
 
 export function outputExecutionTime (fileName: string, functionName: string, executionTime: number) {
-    //console.info(fileName.replace((global as any).appRoot, "~") + ':' + functionName + ' [Execution time]: %dms', executionTime);
+    //logging.info(fileName.replace((global as any).appRoot, "~") + ':' + functionName + ' [Execution time]: %dms', executionTime);
 }
 
 export function callbackAndReturn (data: any, callback?: ((result: any) => any) | null): any {
@@ -192,7 +194,7 @@ export async function pgSimplePatch ({ scheme, table, data, id = null, filter = 
 
     // Validate data
     if (Object.keys(data).length == 0) {
-        console.warn(`pgSimplePatch: No data provided for ${scheme}.${table}`);
+        logging.warn(`pgSimplePatch: No data provided for ${scheme}.${table}`);
         return callbackAndReturn({ success: true }, callback);
     }
 
@@ -337,7 +339,7 @@ export async function pgSimpleDelete ({ scheme, table, id = null, keyMapping = n
 
     } catch (e) {
 
-        console.warn(e)
+        logging.warn(e)
 
         // Rollback transaction
         if (!client) await _client.query('ROLLBACK');
@@ -639,14 +641,14 @@ export async function pgSimpleGet ({ scheme, table, id = null, keys = null, filt
             OFFSET
                 :offset
         `, { useNullForMissing: true })(namedValues);
-        //if (debug) logging.log(namedQuery);
+        if (debug) logging.debug(namedQuery);
         const result = await _client.query(namedQuery);
-        if (result.rowCount < 0) throw new ErrorWithCodeAndMessage({ success: false, message: "Internal server error", error_code: '561c1368-5626-5ae3-af8d-a153eb59d499' });
+        if (result.rowCount == null || result.rowCount < 0) throw new ErrorWithCodeAndMessage({ success: false, message: "Internal server error", error_code: '561c1368-5626-5ae3-af8d-a153eb59d499' });
 
         // Return list
         return callbackAndReturn({ success: true, data: (id != null || result.rows.length == 1) && !forceAsList ? result.rows[0] : result.rows }, callback);
     } catch (e) {
-        console.warn(`Failed to get data from ${scheme}.${table} with id ${id} and filter ${JSON.stringify(filter)}: ${(e as any)?.message ?? e}`);
+        logging.warn(`Failed to get data from ${scheme}.${table} with id ${id} and filter ${JSON.stringify(filter)}: ${(e as any)?.message ?? e}`);
         throw new ErrorWithCodeAndMessage({ success: false, message: "Internal server error", error_code: '98b4307f-79e0-5490-b5d0-bd5cf037ff5a' });
     } finally {
         if (!client) _client.release()
@@ -691,13 +693,13 @@ export async function pgSimpleGetLastUpdate ({ scheme, table, id = null, filter 
             limit: 1,
             ...(filter as { [index: string]: any; }),
         }));
-        if (result.rowCount < 0) throw new ErrorWithCodeAndMessage({ success: false, message: "Internal server error", error_code: 'e7fd75b1-feb1-5080-9a6b-d9cb8ae4ad86' });
-        if (result.rowCount > 1) throw new ErrorWithCodeAndMessage({ success: false, message: "Internal server error", error_code: 'bc4d5693-58ac-5cf3-9a02-fc069b693838' });
+        if (result.rowCount == null || result.rowCount < 0) throw new ErrorWithCodeAndMessage({ success: false, message: "Internal server error", error_code: 'e7fd75b1-feb1-5080-9a6b-d9cb8ae4ad86' });
+        if (result.rowCount == null || result.rowCount > 1) throw new ErrorWithCodeAndMessage({ success: false, message: "Internal server error", error_code: 'bc4d5693-58ac-5cf3-9a02-fc069b693838' });
 
         // Return list
         return callbackAndReturn({ success: true, data: result.rows[0] }, callback);
     } catch (e) {
-        console.warn(e)
+        logging.warn(e)
         throw new ErrorWithCodeAndMessage({ success: false, message: "Internal server error", error_code: '37a911f6-2506-538d-869d-f9d18189478a' });
     } finally {
         if (!client) _client.release()
@@ -733,12 +735,12 @@ export async function pgSimplePost ({ scheme, table, keyValue = {}, callback = n
                 INSERT INTO ${scheme}.${table} DEFAULT VALUES
                 ${returnData ? 'RETURNING *' : ''};
             `);
-        if (addResult.rowCount < 0) throw new ErrorWithCodeAndMessage({ success: false, message: "Internal server error", error_code: '923f61f0-a886-5274-83d1-f3ecd9f3fbe7' });
+        if (addResult.rowCount == null || addResult.rowCount < 0) throw new ErrorWithCodeAndMessage({ success: false, message: "Internal server error", error_code: '923f61f0-a886-5274-83d1-f3ecd9f3fbe7' });
 
         // Return list
         return callbackAndReturn({ success: true, data: addResult.rows.length == 1 ? addResult.rows[0] : addResult.rows }, callback);
     } catch (e) {
-        console.warn(e)
+        logging.warn(e)
 
         // Rollback transaction
         if (!client) await _client.query('ROLLBACK');
