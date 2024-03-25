@@ -1,13 +1,11 @@
 import { PoolClient } from "pg";
-import { pool } from "~/lib/3rdParty/nodejs-helper/postgres.js";
+import pool from "~/lib/3rdParty/nodejs-helper/postgres.js";
 import { Request } from "express";
 import named from 'yesql';
 import moment from "moment";
 import crypto from 'crypto';
 import { create, all } from 'mathjs'
-import { logging } from "~/logging";
-
-import logging from "./logging.js";
+import { logging } from "./logging";
 
 //=====================================================================
 //== Enums
