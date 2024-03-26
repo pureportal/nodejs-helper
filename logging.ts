@@ -12,7 +12,7 @@ const options = {
         colorize: false,
         timestamp: true,
     },
-    file: {
+    info: {
         level: 'info',
         filename: `${appRoot}/logs/app.log`,
         handleExceptions: true,
@@ -22,7 +22,7 @@ const options = {
         colorize: false,
         timestamp: true,
     },
-    console: {
+    debug: {
         level: 'debug',
         filename: `${appRoot}/logs/app.log`,
         handleExceptions: true,
@@ -41,8 +41,8 @@ const logger = winston.createLogger({
     ),
     transports: [
         new winston.transports.File(options.error),
-        new winston.transports.File(options.file),
-        new winston.transports.Console(options.console),
+        new winston.transports.File(options.info),
+        new winston.transports.Console(options.debug),
     ],
 });
 

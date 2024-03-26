@@ -248,7 +248,7 @@ export async function pgSimplePatch ({ scheme, table, data, id = null, filter = 
         return callbackAndReturn({ success: true, data: resultProfile.rows.length == 1 ? resultProfile.rows[0] : resultProfile.rows }, callback);
     } catch (e) {
 
-        console.error(e);
+        logging.error(e);
 
         // Rollback transaction
         if (!client) await _client.query('ROLLBACK');
