@@ -174,9 +174,6 @@ export async function pgSimplePatch ({ scheme, table, data, id = null, filter = 
     // Get function start time
     const start: [number, number] = process.hrtime();
 
-    // Connect to PostgreSQL-Pool
-    const _client = client ?? await pool.connect()
-
     // Convert filter map to array
     if (filter != null && typeof filter.length == "undefined") {
         let newFilter: Filter[] = []
@@ -195,6 +192,9 @@ export async function pgSimplePatch ({ scheme, table, data, id = null, filter = 
         logging.warn(`pgSimplePatch: No data provided for ${scheme}.${table}`);
         return callbackAndReturn({ success: true }, callback);
     }
+
+    // Connect to PostgreSQL-Pool
+    const _client = client ?? await pool.connect()
 
     try {
 
