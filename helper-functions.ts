@@ -31,7 +31,8 @@ export enum JoinType {
 
 export type Filter = {
     where: string,
-    values?: { [key: string]: any },
+    value?: { key: string, value: any },
+    invert?: boolean,
 }
 
 interface JoinInterface {
@@ -74,7 +75,7 @@ export function outputExecutionTime (fileName: string, functionName: string, exe
     //logging.info(fileName.replace((global as any).appRoot, "~") + ':' + functionName + ' [Execution time]: %dms', executionTime);
 }
 
-export function callbackAndReturn (data: any, callback?: ((result: any) => any) | null): any {
+export function callbackAndReturn (data: { success: boolean, data: any }, callback: ((result: Object) => any) | null) {
     if (callback) callback(data);
     return data
 }
@@ -159,6 +160,47 @@ export async function pgMapKeyName ({ key, mapping }: PgMapKeyNameInterface): Pr
     return key;
 }
 
+interface PgFilterMapToFilterArrayInterface {
+    filter: { [index: string]: any },
+}
+function pgFilterMapToFilterArray ({ filter }: PgFilterMapToFilterArrayInterface): Filter[] {
+    let newFilter: Filter[] = []
+    for (let [key, value] of Object.entries(filter)) {
+        if (value == null || value == 'null' || value == 'NULL') {
+            newFilter.push({
+                where: `${key} IS NULL`,
+            })
+        }
+        else if (value == 'NOT NULL' || value == 'not null') {
+            newFilter.push({
+                where: `${key} IS NOT NULL`,
+            })
+        }
+        else if (Array.isArray(value)) {
+            let id = crypto.randomBytes(20).toString('hex');
+            newFilter.push({
+                where: `${key} IN (:${id})`,
+                value: { key: id, value: value },
+            })
+        }
+        else {
+            // If key starts with !, invert the filter
+            let invert = false;
+            if (key.startsWith("!")) {
+                key = key.substring(1);
+                invert = true;
+            }
+
+            let id = crypto.randomBytes(20).toString('hex');
+            newFilter.push({
+                where: `${key} ${invert ? '!=' : '='} :${id}`,
+                value: { key: id, value: value },
+            })
+        }
+    }
+    return newFilter;
+}
+
 interface PgSimplePatchInterface {
     scheme: string,
     table: string,
@@ -169,28 +211,22 @@ interface PgSimplePatchInterface {
     client?: PoolClient | null,
     returnData?: boolean,
 }
-export async function pgSimplePatch ({ scheme, table, data, id = null, filter = [], callback = null, client = null, returnData = false }: PgSimplePatchInterface): Promise<{ [index: string]: any }> {
+interface pgSimplePatchInterfaceReturn {
+    success: boolean,
+    data: [{ [index: string]: any }] | { [index: string]: any },
+}
+export async function pgSimplePatch ({ scheme, table, data, id = null, filter = [], callback = null, client = null, returnData = false }: PgSimplePatchInterface): Promise<pgSimplePatchInterfaceReturn> {
 
     // Get function start time
     const start: [number, number] = process.hrtime();
 
     // Convert filter map to array
-    if (filter != null && typeof filter.length == "undefined") {
-        let newFilter: Filter[] = []
-        for (let [key, value] of Object.entries(filter)) {
-            let id = crypto.randomBytes(20).toString('hex');
-            newFilter.push({
-                where: `${scheme}.${table}.${key} = :${id}`,
-                values: { [id]: value }
-            })
-        }
-        filter = newFilter;
-    }
+    filter = pgFilterMapToFilterArray({ filter: filter });
 
     // Validate data
     if (Object.keys(data).length == 0) {
         logging.warn(`pgSimplePatch: No data provided for ${scheme}.${table}`);
-        return callbackAndReturn({ success: true }, callback);
+        return callbackAndReturn({ success: true, data: null }, callback);
     }
 
     // Connect to PostgreSQL-Pool
@@ -219,9 +255,7 @@ export async function pgSimplePatch ({ scheme, table, data, id = null, filter = 
         // Add filter values
         if (filter != null) {
             (filter as Filter[]).forEach((e: Filter) => {
-                Object.keys(e.values ?? []).forEach((key) => {
-                    namedValues[key] = e.values![key];
-                })
+                namedValues[e.value!.key] = e.value!.value;
             });
         }
 
@@ -273,7 +307,11 @@ interface pgSimpleDeleteInterface {
     callback?: ((result: Object) => any) | null,
     client?: PoolClient | null,
 }
-export async function pgSimpleDelete ({ scheme, table, id = null, keyMapping = null, filter = [], callback = null, client = null }: pgSimpleDeleteInterface): Promise<{ [index: string]: any }> {
+interface pgSimpleDeleteInterfaceReturn {
+    success: boolean,
+    data: [{ [index: string]: any }] | { [index: string]: any },
+}
+export async function pgSimpleDelete ({ scheme, table, id = null, keyMapping = null, filter = [], callback = null, client = null }: pgSimpleDeleteInterface): Promise<pgSimpleDeleteInterfaceReturn> {
 
     // Connect to PostgreSQL-Pool
     const _client = client ?? await pool.connect()
@@ -284,17 +322,7 @@ export async function pgSimpleDelete ({ scheme, table, id = null, keyMapping = n
         if (!client) await _client.query('BEGIN')
 
         // Convert filter map to array
-        if (filter != null && typeof filter.length == "undefined") {
-            let newFilter: Filter[] = []
-            for (let [key, value] of Object.entries(filter)) {
-                let id = crypto.randomBytes(20).toString('hex');
-                newFilter.push({
-                    where: `${scheme}.${table}.${key} = :${id}`,
-                    values: { [id]: value }
-                })
-            }
-            filter = newFilter;
-        }
+        filter = pgFilterMapToFilterArray({ filter: filter });
 
         // A filter must be provided
         if (!id && (!filter || filter.length == 0)) {
@@ -312,9 +340,7 @@ export async function pgSimpleDelete ({ scheme, table, id = null, keyMapping = n
         // Add filter values
         if (filter != null) {
             (filter as Filter[]).forEach((e: Filter) => {
-                Object.keys(e.values ?? []).forEach((key) => {
-                    namedValues[key] = e.values![key];
-                })
+                namedValues[e.value!.key] = e.value!.value;
             });
         }
 
@@ -374,7 +400,11 @@ interface pgSimpleGetInterface {
     client?: PoolClient | null,
     debug?: boolean,
 }
-export async function pgSimpleGet ({ scheme, table, id = null, keys = null, filter = [], request = null, orderBy = null, groupBy = null, join = null, limit = null, offset = null, forceAsList = false, keyMapping = null, allowedKeys = null, hideDeleted = true, callback = null, client = null, debug = false }: pgSimpleGetInterface): Promise<{ [index: string]: any }> {
+interface pgSimpleGetInterfaceReturn {
+    success: boolean,
+    data: [{ [index: string]: any }] | { [index: string]: any },
+}
+export async function pgSimpleGet ({ scheme, table, id = null, keys = null, filter = [], request = null, orderBy = null, groupBy = null, join = null, limit = null, offset = null, forceAsList = false, keyMapping = null, allowedKeys = null, hideDeleted = true, callback = null, client = null, debug = false }: pgSimpleGetInterface): Promise<pgSimpleGetInterfaceReturn> {
 
     // Get function start time
     const start: [number, number] = process.hrtime();
@@ -390,44 +420,7 @@ export async function pgSimpleGet ({ scheme, table, id = null, keys = null, filt
         let _groupBy: string | string[] | { [x: string]: string; } | null = groupBy
 
         // Convert filter map to array
-        if (filter != null && typeof filter.length == "undefined") {
-            let newFilter: Filter[] = []
-            for (let [key, value] of Object.entries(filter)) {
-                // Validate key -> Should be in allowedKeys
-                if (allowedKeys != null && !allowedKeys.includes(key)) {
-                    throw new ErrorWithCodeAndMessage({
-                        success: false,
-                        message: `Key not allowed (scheme: ${scheme}, table: ${table}, key: ${key})`,
-                        error_code: 'a455f906-52af-5e1a-a004-37cf00cbcd8e'
-                    });
-                }
-                key = await pgMapKeyName({ key: key, mapping: keyMapping });
-                let id = crypto.randomBytes(20).toString('hex');
-                if(value == null || value == 'null' || value == 'NULL'){
-                    newFilter.push({
-                        where: `${scheme}.${table}.${key} IS NULL`,
-                    })
-                }
-                else if (value == 'NOT NULL' || value == 'not null'){
-                    newFilter.push({
-                        where: `${scheme}.${table}.${key} IS NOT NULL`,
-                    })
-                }
-                else if (Array.isArray(value)){
-                    newFilter.push({
-                        where: `${scheme}.${table}.${key} IN (:${id})`,
-                        values: { [id]: value }
-                    })
-                }
-                else{
-                    newFilter.push({
-                        where: `${scheme}.${table}.${key} = :${id}`,
-                        values: { [id]: value }
-                    })
-                }
-            }
-            filter = newFilter;
-        }
+        filter = pgFilterMapToFilterArray({ filter: filter });
 
         // Collect data from request
         if (request) {
@@ -572,9 +565,9 @@ export async function pgSimpleGet ({ scheme, table, id = null, keys = null, filt
         // Add filter values
         if (filter != null) {
             (filter as Filter[]).forEach((e: Filter) => {
-                Object.keys(e.values ?? []).forEach((key) => {
-                    namedValues[key] = e.values![key];
-                })
+                if (e.value != null) {
+                    namedValues[e.value!.key] = e.value!.value;
+                }
             });
         }
 
@@ -662,7 +655,11 @@ interface pgSimpleGetLastUpdateInterface {
     callback?: ((result: Object) => any) | null,
     client?: PoolClient | null,
 }
-export async function pgSimpleGetLastUpdate ({ scheme, table, id = null, filter = null, callback = null, client = null }: pgSimpleGetLastUpdateInterface): Promise<{ [index: string]: any }> {
+interface pgSimpleGetLastUpdateInterfaceReturn {
+    success: boolean,
+    data: { [index: string]: any },
+}
+export async function pgSimpleGetLastUpdate ({ scheme, table, id = null, filter = null, callback = null, client = null }: pgSimpleGetLastUpdateInterface): Promise<pgSimpleGetLastUpdateInterfaceReturn> {
 
     // Get function start time
     const start: [number, number] = process.hrtime();
@@ -713,7 +710,11 @@ interface pgSimplePostInterface {
     client?: PoolClient | null,
     returnData?: boolean,
 }
-export async function pgSimplePost ({ scheme, table, keyValue = {}, callback = null, client = null, returnData = true }: pgSimplePostInterface): Promise<{ [index: string]: any }> {
+interface pgSimplePostInterfaceReturn {
+    success: boolean,
+    data: { [index: string]: any },
+}
+export async function pgSimplePost ({ scheme, table, keyValue = {}, callback = null, client = null, returnData = true }: pgSimplePostInterface): Promise<pgSimplePostInterfaceReturn> {
 
     // Get function start time
     const start: [number, number] = process.hrtime();
