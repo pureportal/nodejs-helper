@@ -399,12 +399,15 @@ interface pgSimpleGetInterface {
     callback?: ((result: Object) => any) | null,
     client?: PoolClient | null,
     debug?: boolean,
+    forUpdate?: boolean,
+    forShare?: boolean,
+    forNoKeyUpdate?: boolean,
 }
 interface pgSimpleGetInterfaceReturn {
     success: boolean,
     data: [{ [index: string]: any }] | { [index: string]: any },
 }
-export async function pgSimpleGet ({ scheme, table, id = null, keys = null, filter = [], request = null, orderBy = null, groupBy = null, join = null, limit = null, offset = null, forceAsList = false, keyMapping = null, allowedKeys = null, hideDeleted = true, callback = null, client = null, debug = false }: pgSimpleGetInterface): Promise<pgSimpleGetInterfaceReturn> {
+export async function pgSimpleGet ({ scheme, table, id = null, keys = null, filter = [], request = null, orderBy = null, groupBy = null, join = null, limit = null, offset = null, forceAsList = false, keyMapping = null, allowedKeys = null, hideDeleted = true, callback = null, client = null, debug = false, forUpdate = false, forShare = false, forNoKeyUpdate = false }: pgSimpleGetInterface): Promise<pgSimpleGetInterfaceReturn> {
 
     // Get function start time
     const start: [number, number] = process.hrtime();
@@ -631,6 +634,9 @@ export async function pgSimpleGet ({ scheme, table, id = null, keys = null, filt
                 :limit
             OFFSET
                 :offset
+            ${forUpdate ? 'FOR UPDATE' : ''}
+            ${forShare ? 'FOR SHARE' : ''}
+            ${forNoKeyUpdate ? 'FOR NO KEY UPDATE' : ''}
         `, { useNullForMissing: true })(namedValues);
         if (debug) logging.debug(namedQuery);
         const result = await _client.query(namedQuery);
