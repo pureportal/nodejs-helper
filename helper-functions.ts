@@ -210,12 +210,13 @@ interface PgSimplePatchInterface {
     callback?: ((result: Object) => any) | null,
     client?: PoolClient | null,
     returnData?: boolean,
+    returnColumns?: string[],
 }
 interface pgSimplePatchInterfaceReturn {
     success: boolean,
     data: [{ [index: string]: any }] | { [index: string]: any },
 }
-export async function pgSimplePatch ({ scheme, table, data, id = null, filter = [], callback = null, client = null, returnData = false }: PgSimplePatchInterface): Promise<pgSimplePatchInterfaceReturn> {
+export async function pgSimplePatch ({ scheme, table, data, id = null, filter = [], callback = null, client = null, returnData = false, returnColumns = [] }: PgSimplePatchInterface): Promise<pgSimplePatchInterfaceReturn> {
 
     // Get function start time
     const start: [number, number] = process.hrtime();
@@ -271,7 +272,7 @@ export async function pgSimplePatch ({ scheme, table, data, id = null, filter = 
             WHERE TRUE
                 ${id != null ? `AND ${scheme}.${table}.id = :id` : ''}
                 ${filter != null ? (filter as Filter[]).map((e) => `AND ${(e.where as string).replace(/\$scheme/g, scheme).replace(/\$table/g, table)}\n`).join('') : ''}
-            ${returnData ? 'RETURNING *' : ''};
+            ${returnData ? `RETURNING ${returnColumns.length > 0 ? returnColumns.join(', ') : '*'};` : ';'}
         `, { useNullForMissing: true })(namedValues)
         const resultProfile = await _client.query(namedQuery)
 
