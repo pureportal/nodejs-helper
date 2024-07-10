@@ -7,8 +7,6 @@ import crypto from 'crypto';
 import { create, all } from 'mathjs'
 import { logging } from "./logging";
 
-import logging from "./logging.js";
-
 //=====================================================================
 //== Enums
 //=====================================================================
