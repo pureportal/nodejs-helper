@@ -1,10 +1,11 @@
 import { PoolClient } from "pg";
-import { pool } from "~/lib/3rdParty/nodejs-helper/postgres.js";
+import pool from "~/lib/3rdParty/nodejs-helper/postgres.js";
 import { Request } from "express";
 import named from 'yesql';
 import moment from "moment";
 import crypto from 'crypto';
 import { create, all } from 'mathjs'
+import { logging } from "./logging";
 
 import logging from "./logging.js";
 
@@ -32,7 +33,8 @@ export enum JoinType {
 
 export type Filter = {
     where: string,
-    values?: { [key: string]: any },
+    value?: { key: string, value: any },
+    invert?: boolean,
 }
 
 interface JoinInterface {
@@ -75,7 +77,7 @@ export function outputExecutionTime (fileName: string, functionName: string, exe
     //logging.info(fileName.replace((global as any).appRoot, "~") + ':' + functionName + ' [Execution time]: %dms', executionTime);
 }
 
-export function callbackAndReturn (data: any, callback?: ((result: any) => any) | null): any {
+export function callbackAndReturn (data: { success: boolean, data: any }, callback: ((result: Object) => any) | null) {
     if (callback) callback(data);
     return data
 }
@@ -160,6 +162,47 @@ export async function pgMapKeyName ({ key, mapping }: PgMapKeyNameInterface): Pr
     return key;
 }
 
+interface PgFilterMapToFilterArrayInterface {
+    filter: { [index: string]: any },
+}
+function pgFilterMapToFilterArray ({ filter }: PgFilterMapToFilterArrayInterface): Filter[] {
+    let newFilter: Filter[] = []
+    for (let [key, value] of Object.entries(filter)) {
+        if (value == null || value == 'null' || value == 'NULL') {
+            newFilter.push({
+                where: `${key} IS NULL`,
+            })
+        }
+        else if (value == 'NOT NULL' || value == 'not null') {
+            newFilter.push({
+                where: `${key} IS NOT NULL`,
+            })
+        }
+        else if (Array.isArray(value)) {
+            let id = crypto.randomBytes(20).toString('hex');
+            newFilter.push({
+                where: `${key} IN (:${id})`,
+                value: { key: id, value: value },
+            })
+        }
+        else {
+            // If key starts with !, invert the filter
+            let invert = false;
+            if (key.startsWith("!")) {
+                key = key.substring(1);
+                invert = true;
+            }
+
+            let id = crypto.randomBytes(20).toString('hex');
+            newFilter.push({
+                where: `${key} ${invert ? '!=' : '='} :${id}`,
+                value: { key: id, value: value },
+            })
+        }
+    }
+    return newFilter;
+}
+
 interface PgSimplePatchInterface {
     scheme: string,
     table: string,
@@ -169,33 +212,28 @@ interface PgSimplePatchInterface {
     callback?: ((result: Object) => any) | null,
     client?: PoolClient | null,
     returnData?: boolean,
+    returnColumns?: string[],
 }
-export async function pgSimplePatch ({ scheme, table, data, id = null, filter = [], callback = null, client = null, returnData = false }: PgSimplePatchInterface): Promise<{ [index: string]: any }> {
+interface pgSimplePatchInterfaceReturn {
+    success: boolean,
+    data: [{ [index: string]: any }] | { [index: string]: any },
+}
+export async function pgSimplePatch ({ scheme, table, data, id = null, filter = [], callback = null, client = null, returnData = false, returnColumns = [] }: PgSimplePatchInterface): Promise<pgSimplePatchInterfaceReturn> {
 
     // Get function start time
     const start: [number, number] = process.hrtime();
 
-    // Connect to PostgreSQL-Pool
-    const _client = client ?? await pool.connect()
-
     // Convert filter map to array
-    if (filter != null && typeof filter.length == "undefined") {
-        let newFilter: Filter[] = []
-        for (let [key, value] of Object.entries(filter)) {
-            let id = crypto.randomBytes(20).toString('hex');
-            newFilter.push({
-                where: `${scheme}.${table}.${key} = :${id}`,
-                values: { [id]: value }
-            })
-        }
-        filter = newFilter;
-    }
+    filter = pgFilterMapToFilterArray({ filter: filter });
 
     // Validate data
     if (Object.keys(data).length == 0) {
         logging.warn(`pgSimplePatch: No data provided for ${scheme}.${table}`);
-        return callbackAndReturn({ success: true }, callback);
+        return callbackAndReturn({ success: true, data: null }, callback);
     }
+
+    // Connect to PostgreSQL-Pool
+    const _client = client ?? await pool.connect()
 
     try {
 
@@ -220,9 +258,7 @@ export async function pgSimplePatch ({ scheme, table, data, id = null, filter = 
         // Add filter values
         if (filter != null) {
             (filter as Filter[]).forEach((e: Filter) => {
-                Object.keys(e.values ?? []).forEach((key) => {
-                    namedValues[key] = e.values![key];
-                })
+                namedValues[e.value!.key] = e.value!.value;
             });
         }
 
@@ -238,7 +274,7 @@ export async function pgSimplePatch ({ scheme, table, data, id = null, filter = 
             WHERE TRUE
                 ${id != null ? `AND ${scheme}.${table}.id = :id` : ''}
                 ${filter != null ? (filter as Filter[]).map((e) => `AND ${(e.where as string).replace(/\$scheme/g, scheme).replace(/\$table/g, table)}\n`).join('') : ''}
-            ${returnData ? 'RETURNING *' : ''};
+            ${returnData ? `RETURNING ${returnColumns.length > 0 ? returnColumns.join(', ') : '*'};` : ';'}
         `, { useNullForMissing: true })(namedValues)
         const resultProfile = await _client.query(namedQuery)
 
@@ -249,7 +285,7 @@ export async function pgSimplePatch ({ scheme, table, data, id = null, filter = 
         return callbackAndReturn({ success: true, data: resultProfile.rows.length == 1 ? resultProfile.rows[0] : resultProfile.rows }, callback);
     } catch (e) {
 
-        console.error(e);
+        logging.error(e);
 
         // Rollback transaction
         if (!client) await _client.query('ROLLBACK');
@@ -274,7 +310,11 @@ interface pgSimpleDeleteInterface {
     callback?: ((result: Object) => any) | null,
     client?: PoolClient | null,
 }
-export async function pgSimpleDelete ({ scheme, table, id = null, keyMapping = null, filter = [], callback = null, client = null }: pgSimpleDeleteInterface): Promise<{ [index: string]: any }> {
+interface pgSimpleDeleteInterfaceReturn {
+    success: boolean,
+    data: [{ [index: string]: any }] | { [index: string]: any },
+}
+export async function pgSimpleDelete ({ scheme, table, id = null, keyMapping = null, filter = [], callback = null, client = null }: pgSimpleDeleteInterface): Promise<pgSimpleDeleteInterfaceReturn> {
 
     // Connect to PostgreSQL-Pool
     const _client = client ?? await pool.connect()
@@ -285,17 +325,7 @@ export async function pgSimpleDelete ({ scheme, table, id = null, keyMapping = n
         if (!client) await _client.query('BEGIN')
 
         // Convert filter map to array
-        if (filter != null && typeof filter.length == "undefined") {
-            let newFilter: Filter[] = []
-            for (let [key, value] of Object.entries(filter)) {
-                let id = crypto.randomBytes(20).toString('hex');
-                newFilter.push({
-                    where: `${scheme}.${table}.${key} = :${id}`,
-                    values: { [id]: value }
-                })
-            }
-            filter = newFilter;
-        }
+        filter = pgFilterMapToFilterArray({ filter: filter });
 
         // A filter must be provided
         if (!id && (!filter || filter.length == 0)) {
@@ -313,9 +343,7 @@ export async function pgSimpleDelete ({ scheme, table, id = null, keyMapping = n
         // Add filter values
         if (filter != null) {
             (filter as Filter[]).forEach((e: Filter) => {
-                Object.keys(e.values ?? []).forEach((key) => {
-                    namedValues[key] = e.values![key];
-                })
+                namedValues[e.value!.key] = e.value!.value;
             });
         }
 
@@ -374,8 +402,15 @@ interface pgSimpleGetInterface {
     callback?: ((result: Object) => any) | null,
     client?: PoolClient | null,
     debug?: boolean,
+    forUpdate?: boolean,
+    forShare?: boolean,
+    forNoKeyUpdate?: boolean,
 }
-export async function pgSimpleGet ({ scheme, table, id = null, keys = null, filter = [], request = null, orderBy = null, groupBy = null, join = null, limit = null, offset = null, forceAsList = false, keyMapping = null, allowedKeys = null, hideDeleted = true, callback = null, client = null, debug = false }: pgSimpleGetInterface): Promise<{ [index: string]: any }> {
+interface pgSimpleGetInterfaceReturn {
+    success: boolean,
+    data: [{ [index: string]: any }] | { [index: string]: any },
+}
+export async function pgSimpleGet ({ scheme, table, id = null, keys = null, filter = [], request = null, orderBy = null, groupBy = null, join = null, limit = null, offset = null, forceAsList = false, keyMapping = null, allowedKeys = null, hideDeleted = true, callback = null, client = null, debug = false, forUpdate = false, forShare = false, forNoKeyUpdate = false }: pgSimpleGetInterface): Promise<pgSimpleGetInterfaceReturn> {
 
     // Get function start time
     const start: [number, number] = process.hrtime();
@@ -391,44 +426,7 @@ export async function pgSimpleGet ({ scheme, table, id = null, keys = null, filt
         let _groupBy: string | string[] | { [x: string]: string; } | null = groupBy
 
         // Convert filter map to array
-        if (filter != null && typeof filter.length == "undefined") {
-            let newFilter: Filter[] = []
-            for (let [key, value] of Object.entries(filter)) {
-                // Validate key -> Should be in allowedKeys
-                if (allowedKeys != null && !allowedKeys.includes(key)) {
-                    throw new ErrorWithCodeAndMessage({
-                        success: false,
-                        message: `Key not allowed (scheme: ${scheme}, table: ${table}, key: ${key})`,
-                        error_code: 'a455f906-52af-5e1a-a004-37cf00cbcd8e'
-                    });
-                }
-                key = await pgMapKeyName({ key: key, mapping: keyMapping });
-                let id = crypto.randomBytes(20).toString('hex');
-                if(value == null || value == 'null' || value == 'NULL'){
-                    newFilter.push({
-                        where: `${scheme}.${table}.${key} IS NULL`,
-                    })
-                }
-                else if (value == 'NOT NULL' || value == 'not null'){
-                    newFilter.push({
-                        where: `${scheme}.${table}.${key} IS NOT NULL`,
-                    })
-                }
-                else if (Array.isArray(value)){
-                    newFilter.push({
-                        where: `${scheme}.${table}.${key} IN (:${id})`,
-                        values: { [id]: value }
-                    })
-                }
-                else{
-                    newFilter.push({
-                        where: `${scheme}.${table}.${key} = :${id}`,
-                        values: { [id]: value }
-                    })
-                }
-            }
-            filter = newFilter;
-        }
+        filter = pgFilterMapToFilterArray({ filter: filter });
 
         // Collect data from request
         if (request) {
@@ -573,9 +571,9 @@ export async function pgSimpleGet ({ scheme, table, id = null, keys = null, filt
         // Add filter values
         if (filter != null) {
             (filter as Filter[]).forEach((e: Filter) => {
-                Object.keys(e.values ?? []).forEach((key) => {
-                    namedValues[key] = e.values![key];
-                })
+                if (e.value != null) {
+                    namedValues[e.value!.key] = e.value!.value;
+                }
             });
         }
 
@@ -624,8 +622,7 @@ export async function pgSimpleGet ({ scheme, table, id = null, keys = null, filt
         const namedQuery = named.pg(`
             SELECT 
                 ${scheme}.${table}.id, 
-                FLOOR(EXTRACT(EPOCH FROM ${scheme}.${table}.created_at)) AS created_at,
-                FLOOR(EXTRACT(EPOCH FROM ${scheme}.${table}.updated_at)) AS updated_at${keys != null && keys.length > 0 ? ',' : ''}
+                FLOOR(EXTRACT(EPOCH FROM ${scheme}.${table}.created_at)) AS created_at${keys != null && keys.length > 0 ? ',' : ''}
                 ${keys != null ? keys?.map((element, _index) => /^[a-z\_]$/.test(element) ? `${scheme}.${table}.${element}\n` : `${element}`) : ''}
             FROM 
                 ${scheme}.${table}
@@ -635,11 +632,14 @@ export async function pgSimpleGet ({ scheme, table, id = null, keys = null, filt
                 ${filter != null ? (filter as Filter[]).map((e) => `AND ${(e.where as string).replace(/\$scheme/g, scheme).replace(/\$table/g, table)}\n`).join('') : ''}
             ${groupByString != null ? `GROUP BY ${groupByString}` : ''}
             ORDER BY 
-                ${orderByString ?? `${scheme}.${table}.updated_at DESC`}
+                ${orderByString ?? `${scheme}.${table}.created_at DESC`}
             LIMIT 
                 :limit
             OFFSET
                 :offset
+            ${forUpdate ? 'FOR UPDATE' : ''}
+            ${forShare ? 'FOR SHARE' : ''}
+            ${forNoKeyUpdate ? 'FOR NO KEY UPDATE' : ''}
         `, { useNullForMissing: true })(namedValues);
         if (debug) logging.debug(namedQuery);
         const result = await _client.query(namedQuery);
@@ -664,7 +664,11 @@ interface pgSimpleGetLastUpdateInterface {
     callback?: ((result: Object) => any) | null,
     client?: PoolClient | null,
 }
-export async function pgSimpleGetLastUpdate ({ scheme, table, id = null, filter = null, callback = null, client = null }: pgSimpleGetLastUpdateInterface): Promise<{ [index: string]: any }> {
+interface pgSimpleGetLastUpdateInterfaceReturn {
+    success: boolean,
+    data: { [index: string]: any },
+}
+export async function pgSimpleGetLastUpdate ({ scheme, table, id = null, filter = null, callback = null, client = null }: pgSimpleGetLastUpdateInterface): Promise<pgSimpleGetLastUpdateInterfaceReturn> {
 
     // Get function start time
     const start: [number, number] = process.hrtime();
@@ -678,15 +682,14 @@ export async function pgSimpleGetLastUpdate ({ scheme, table, id = null, filter 
         const result = await _client.query(named.pg(`
             SELECT 
                 ${scheme}.${table}.id, 
-                FLOOR(EXTRACT(EPOCH FROM ${scheme}.${table}.created_at)) AS created_at,
-                FLOOR(EXTRACT(EPOCH FROM ${scheme}.${table}.created_at)) AS updated_at
+                FLOOR(EXTRACT(EPOCH FROM ${scheme}.${table}.created_at)) AS created_at
             FROM 
                 ${scheme}.${table}
             WHERE TRUE
                 ${id != null ? `AND ${scheme}.${table}.id = :id` : ''}
                 ${filter != null ? Object.keys(filter).map((e, index) => `AND ${scheme}.${table}.${e} = :${e}`).join('\n') : ''}
             ORDER BY 
-                updated_at DESC
+                created_at DESC
             LIMIT 
                 1
             `, { useNullForMissing: true })({
@@ -716,7 +719,11 @@ interface pgSimplePostInterface {
     client?: PoolClient | null,
     returnData?: boolean,
 }
-export async function pgSimplePost ({ scheme, table, keyValue = {}, callback = null, client = null, returnData = true }: pgSimplePostInterface): Promise<{ [index: string]: any }> {
+interface pgSimplePostInterfaceReturn {
+    success: boolean,
+    data: { [index: string]: any },
+}
+export async function pgSimplePost ({ scheme, table, keyValue = {}, callback = null, client = null, returnData = true }: pgSimplePostInterface): Promise<pgSimplePostInterfaceReturn> {
 
     // Get function start time
     const start: [number, number] = process.hrtime();
