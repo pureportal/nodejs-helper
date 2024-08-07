@@ -37,7 +37,7 @@ const logger = winston.createLogger({
         format.timestamp({
             format: 'YYYY-MM-DD HH:mm:ss'
         }),
-        format.printf(info => `${info.timestamp} ${info.level}: ${info.message}` + (info.splat !== undefined ? `${info.splat}` : " "))
+        format.printf(info => `${info.timestamp} ${"          ".substring(0, 5 - info.level.length) + info.level.toUpperCase()}: ${info.message}` + (info.splat !== undefined ? `${info.splat}` : " "))
     ),
     transports: [
         new winston.transports.File(options.error),
