@@ -164,6 +164,7 @@ interface PgFilterMapToFilterArrayInterface {
     filter: { [index: string]: any },
 }
 function pgFilterMapToFilterArray ({ filter }: PgFilterMapToFilterArrayInterface): Filter[] {
+    if (filter == null) return [];
     let newFilter: Filter[] = []
     for (let [key, value] of Object.entries(filter)) {
         if (value == null || value == 'null' || value == 'NULL') {
