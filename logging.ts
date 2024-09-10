@@ -24,7 +24,6 @@ const options = {
     },
     debug: {
         level: 'debug',
-        filename: `${appRoot}/logs/app.log`,
         handleExceptions: true,
         json: false,
         colorize: true,
