@@ -10,7 +10,7 @@ const pool = new Pool({
     port:     parseInt(process.env.POSTGRES_PORT || '5432'),
 
     // Pool size configuration
-    max: parseInt(process.env.POSTGRES_POOL_MAX || '10'),     // Reduced from 20 to 10 for better resource management
+    max: parseInt(process.env.POSTGRES_POOL_MAX || '75'),     // Increased from 10 to 75 to handle more connections
     min: parseInt(process.env.POSTGRES_POOL_MIN || '2'),      // Increased from 0 to 2 to maintain a minimum pool
 
     // Timeouts (in milliseconds)
@@ -27,7 +27,7 @@ const pool = new Pool({
     ssl: process.env.POSTGRES_SSL === 'true' ? true : false,  // Enable SSL only when explicitly set to 'true'
 
     // Resource management
-    allowExitOnIdle: process.env.POSTGRES_ALLOW_EXIT_ON_IDLE !== 'false',  // Default to true unless explicitly set to 'false'
+    allowExitOnIdle: process.env.POSTGRES_ALLOW_EXIT_ON_IDLE === 'true',  // Default to false unless explicitly set to 'true'
     maxUses: parseInt(process.env.POSTGRES_MAX_USES || '7500'),  // Increased to 7500 to reduce connection churn
 
     // Advanced settings
