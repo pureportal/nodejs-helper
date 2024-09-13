@@ -76,20 +76,20 @@ function removeFileCacheFromCache (id: string) {
     }
 }
 
-function sendHash (id: string, filePath: string, res: any) {
+function sendHash (id: string, filePath: string, res: any): boolean {
 
     // Check if hash exists
     const file = getFileCacheFromCache(id);
     if (file) {
         res.json({ hash: file.hash });
-        return;
+        return true;
     }
 
     // Check if file exists
     if (!fs.existsSync(filePath)) {
         logging.error(`File not found: ${filePath}`);
         res.status(404).send('Not Found');
-        return;
+        return false;
     }
 
     // Generate hash
@@ -98,6 +98,8 @@ function sendHash (id: string, filePath: string, res: any) {
 
     // Return hash
     res.json({ hash });
+
+    return true;
 }
 
 function sendHashWithBuffer (id: string, fileBuffer: Buffer, res: any) {
