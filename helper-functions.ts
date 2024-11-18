@@ -150,7 +150,7 @@ interface PgMapKeyNameInterface {
     key: string,
     mapping: { [index: string]: string } | null,
 }
-export async function pgMapKeyName ({ key, mapping }: PgMapKeyNameInterface): Promise<string> {
+export function pgMapKeyName ({ key, mapping }: PgMapKeyNameInterface): string {
     if (mapping != null && Object.keys(mapping).indexOf(key) >= 0) {
         return mapping[key];
     }
@@ -162,11 +162,13 @@ export async function pgMapKeyName ({ key, mapping }: PgMapKeyNameInterface): Pr
 
 interface PgFilterMapToFilterArrayInterface {
     filter: { [index: string]: any },
+    mapping?: { [index: string]: string } | null,
 }
-function pgFilterMapToFilterArray ({ filter }: PgFilterMapToFilterArrayInterface): Filter[] {
+function pgFilterMapToFilterArray ({ filter, mapping = null }: PgFilterMapToFilterArrayInterface): Filter[] {
     if (filter == null) return [];
     let newFilter: Filter[] = []
     for (let [key, value] of Object.entries(filter)) {
+        key = pgMapKeyName({ key, mapping });
         if (value == null || value == 'null' || value == 'NULL') {
             newFilter.push({
                 where: `${key} IS NULL`,
@@ -223,7 +225,7 @@ export async function pgSimplePatch ({ scheme, table, data, id = null, filter = 
     const start: [number, number] = process.hrtime();
 
     // Convert filter map to array
-    filter = pgFilterMapToFilterArray({ filter: filter });
+    filter = pgFilterMapToFilterArray({ filter });
 
     // Validate data
     if (Object.keys(data).length == 0) {
@@ -324,7 +326,7 @@ export async function pgSimpleDelete ({ scheme, table, id = null, keyMapping = n
         if (!client) await _client.query('BEGIN')
 
         // Convert filter map to array
-        filter = pgFilterMapToFilterArray({ filter: filter });
+        filter = pgFilterMapToFilterArray({ filter: filter, mapping: keyMapping });
 
         // A filter must be provided
         if (!id && (!filter || filter.length == 0)) {
@@ -425,7 +427,7 @@ export async function pgSimpleGet ({ scheme, table, id = null, keys = null, filt
         let _groupBy: string | string[] | { [x: string]: string; } | null = groupBy
 
         // Convert filter map to array
-        filter = pgFilterMapToFilterArray({ filter: filter });
+        filter = pgFilterMapToFilterArray({ filter: filter, mapping: keyMapping });
 
         // Collect data from request
         if (request) {
@@ -448,7 +450,7 @@ export async function pgSimpleGet ({ scheme, table, id = null, keys = null, filt
                         const result = regExp.exec(search);
                         if (result) {
                             filter.push({
-                                where: `${scheme}.${table}.${await pgMapKeyName({ key: result[1], mapping: keyMapping })} IS NULL`,
+                                where: `${scheme}.${table}.${pgMapKeyName({ key: result[1], mapping: keyMapping })} IS NULL`,
                             });
                             search = search.replace(result[0], "").trim();
                         }
@@ -464,14 +466,14 @@ export async function pgSimpleGet ({ scheme, table, id = null, keys = null, filt
                             let filterId = crypto.randomBytes(20).toString('hex');
                             if (result.indexOf("null") >= 0) {
                                 filter.push({
-                                    where: `(${scheme}.${table}.${await pgMapKeyName({ key: result[1], mapping: keyMapping })} = :${filterId} OR ${scheme}.${table}.${await pgMapKeyName({ key: result[1], mapping: keyMapping })} IS NULL)`,
+                                    where: `(${scheme}.${table}.${pgMapKeyName({ key: result[1], mapping: keyMapping })} = :${filterId} OR ${scheme}.${table}.${pgMapKeyName({ key: result[1], mapping: keyMapping })} IS NULL)`,
                                     values: { [filterId]: result[2] },
                                 });
                             }
                             else {
                                 filter.push({
                                     id: filterId,
-                                    where: `${scheme}.${table}.${await pgMapKeyName({ key: result[1], mapping: keyMapping })} = :${filterId}`,
+                                    where: `${scheme}.${table}.${pgMapKeyName({ key: result[1], mapping: keyMapping })} = :${filterId}`,
                                     values: { [filterId]: result[2] },
                                 });
                             }
@@ -489,13 +491,13 @@ export async function pgSimpleGet ({ scheme, table, id = null, keys = null, filt
                             let filterId = crypto.randomBytes(20).toString('hex');
                             if (result.indexOf("null") >= 0) {
                                 filter.push({
-                                    where: `(${scheme}.${table}.${await pgMapKeyName({ key: result[1], mapping: keyMapping })} = :${filterId} OR ${scheme}.${table}.${await pgMapKeyName({ key: result[1], mapping: keyMapping })} IS NULL)`,
+                                    where: `(${scheme}.${table}.${pgMapKeyName({ key: result[1], mapping: keyMapping })} = :${filterId} OR ${scheme}.${table}.${pgMapKeyName({ key: result[1], mapping: keyMapping })} IS NULL)`,
                                     values: { [filterId]: result[2] == "true" ? true : result[2] == "false" ? false : null },
                                 });
                             }
                             else {
                                 filter.push({
-                                    where: `${scheme}.${table}.${await pgMapKeyName({ key: result[1], mapping: keyMapping })} = :${filterId}`,
+                                    where: `${scheme}.${table}.${pgMapKeyName({ key: result[1], mapping: keyMapping })} = :${filterId}`,
                                     values: { [filterId]: result[2] == "true" ? true : result[2] == "false" ? false : null },
                                 });
                             }
@@ -513,14 +515,14 @@ export async function pgSimpleGet ({ scheme, table, id = null, keys = null, filt
                             let filterId = crypto.randomBytes(20).toString('hex');
                             if (result.indexOf("null") >= 0) {
                                 filter.push({
-                                    where: `(${scheme}.${table}.${await pgMapKeyName({ key: result[1], mapping: keyMapping })} = :${filterId} OR ${scheme}.${table}.${await pgMapKeyName({ key: result[1], mapping: keyMapping })} IS NULL)`,
+                                    where: `(${scheme}.${table}.${pgMapKeyName({ key: result[1], mapping: keyMapping })} = :${filterId} OR ${scheme}.${table}.${pgMapKeyName({ key: result[1], mapping: keyMapping })} IS NULL)`,
                                     values: { [filterId]: result[2] },
                                 });
                             }
                             else {
                                 filter.push({
                                     id: filterId,
-                                    where: `${scheme}.${table}.${await pgMapKeyName({ key: result[1], mapping: keyMapping })} = :${filterId}`,
+                                    where: `${scheme}.${table}.${pgMapKeyName({ key: result[1], mapping: keyMapping })} = :${filterId}`,
                                     values: { [filterId]: result[2] },
                                 });
                             }
@@ -538,13 +540,13 @@ export async function pgSimpleGet ({ scheme, table, id = null, keys = null, filt
                             let filterId = crypto.randomBytes(20).toString('hex');
                             if (result.indexOf("null") >= 0) {
                                 filter.push({
-                                    where: `(${scheme}.${table}.${await pgMapKeyName({ key: result[1], mapping: keyMapping })} = :${filterId} OR ${scheme}.${table}.${await pgMapKeyName({ key: result[1], mapping: keyMapping })} IS NULL)`,
+                                    where: `(${scheme}.${table}.${pgMapKeyName({ key: result[1], mapping: keyMapping })} = :${filterId} OR ${scheme}.${table}.${pgMapKeyName({ key: result[1], mapping: keyMapping })} IS NULL)`,
                                     values: { [filterId]: result[2] },
                                 });
                             }
                             else {
                                 filter.push({
-                                    where: `${scheme}.${table}.${await pgMapKeyName({ key: result[1], mapping: keyMapping })} = :${filterId}`,
+                                    where: `${scheme}.${table}.${pgMapKeyName({ key: result[1], mapping: keyMapping })} = :${filterId}`,
                                     values: { [filterId]: result[2] },
                                 });
                             }
@@ -581,7 +583,7 @@ export async function pgSimpleGet ({ scheme, table, id = null, keys = null, filt
             let orderByMap: { [x: string]: string; } = {};
             _orderBy.split(',').forEach(async (e) => {
                 let [key, value] = e.split(' ');
-                key = await pgMapKeyName({ key: key, mapping: keyMapping });
+                key = pgMapKeyName({ key: key, mapping: keyMapping });
                 value = value.trim();
                 orderByMap[key] = value;
             })
