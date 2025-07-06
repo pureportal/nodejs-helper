@@ -1,4 +1,4 @@
-import pkg from "pg";
+import pkg, { PoolClient } from "pg";
 const { Pool } = pkg;
 
 const pool = new Pool({
@@ -41,8 +41,48 @@ const pool = new Pool({
 // Attach error handler to the pool
 pool.on("error", (err) => {
   console.error("Unexpected error on idle client", err);
-  process.exit(-1);
+  // Log the error but don't immediately exit - let the application handle graceful shutdown
+  console.error("Database pool error - application may need restart");
 });
+
+// Connection monitoring
+pool.on("connect", () => {
+  console.log("New client connected to database");
+});
+
+pool.on("acquire", () => {
+  console.log("Client acquired from pool");
+});
+
+pool.on("remove", () => {
+  console.log("Client removed from pool");
+});
+
+// Health check function
+export const checkDatabaseHealth = async (): Promise<boolean> => {
+  let client: PoolClient | undefined;
+  try {
+    client = await pool.connect();
+    await client.query("SELECT 1");
+    return true;
+  } catch (error) {
+    console.error("Database health check failed:", error);
+    return false;
+  } finally {
+    if (client) {
+      client.release();
+    }
+  }
+};
+
+// Pool stats monitoring
+export const getPoolStats = () => {
+  return {
+    totalCount: pool.totalCount,
+    idleCount: pool.idleCount,
+    waitingCount: pool.waitingCount,
+  };
+};
 
 export default pool;
 export { pool as postgres };
